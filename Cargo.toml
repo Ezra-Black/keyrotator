@@ -6,6 +6,10 @@ members = ["crates/core", "crates/cli"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+rust-version = "1.82"
+repository = "https://github.com/Ezra-Black/rekey"
+homepage = "https://github.com/Ezra-Black/rekey"
+authors = ["Ezra Black"]
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time", "io-std", "io-util"] }

@@ -3,6 +3,14 @@ name = "rekey-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Provider connectors and rotation engine behind the rekey CLI"
+readme = "README.md"
+keywords = ["api-keys", "secrets", "rotation"]
+categories = ["authentication"]
 
 [dependencies]
 tokio = { workspace = true }

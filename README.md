@@ -9,25 +9,26 @@ credential.
 
 **CLI** — rotate a GitLab token straight into a `.env` file:
 
-![rekey rotating a GitLab token from the CLI](docs/images/cli-rotate.png)
+![rekey rotating a GitLab token from the CLI](https://raw.githubusercontent.com/Ezra-Black/rekey/main/docs/images/cli-rotate.png)
 
 **MCP** — Claude rotating the same token through `rekey mcp`; the secret
 never reaches the model:
 
-![Claude rotating a GitLab token via the rekey MCP server](docs/images/mcp-rotate.png)
+![Claude rotating a GitLab token via the rekey MCP server](https://raw.githubusercontent.com/Ezra-Black/rekey/main/docs/images/mcp-rotate.png)
 
 ## Install
 
-Requires stable [Rust](https://rustup.rs).
+Prebuilt binaries for macOS, Linux and Windows:
+[Releases](https://github.com/Ezra-Black/rekey/releases/latest).
+
+Or with [Rust](https://rustup.rs) (stable):
 
 ```bash
-git clone https://github.com/Ezra-Black/keyrotator.git
-cd rekey
-cargo install --path crates/cli
+cargo install rekey
 ```
 
 OS keychain support (macOS Keychain, Windows Credential Manager, Linux Secret
-Service) is built in. `--no-default-features` on `rekey-core` removes it.
+Service) is built in.
 
 ## Quick start
 
@@ -189,7 +190,7 @@ signs in with (GitLab, Cloudflare) updates the saved login.
 
 AWS needs the `aws` CLI, npm needs `npm`, `--gh-secret` needs `gh`.
 
-**Want another provider?** [Request it](https://github.com/Ezra-Black/keyrotator/issues/new?template=provider_request.yml).
+**Want another provider?** [Request it](https://github.com/Ezra-Black/rekey/issues/new?template=provider_request.yml).
 
 ## Rotation semantics
 
@@ -231,9 +232,14 @@ installing a new build.
 
 ## Contributing
 
-- New provider or feature: [open an issue](https://github.com/Ezra-Black/keyrotator/issues/new/choose).
+- New provider or feature: [open an issue](https://github.com/Ezra-Black/rekey/issues/new/choose).
 - Code: see [CONTRIBUTING.md](CONTRIBUTING.md). A provider is one file
   implementing the `Connector` trait.
+
+## Links
+
+- crates.io: [rekey](https://crates.io/crates/rekey)
+- MCP Registry name — mcp-name: io.github.Ezra-Black/rekey
 
 ## Credits
 
