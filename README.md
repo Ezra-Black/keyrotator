@@ -7,6 +7,15 @@ MCP server.
 Only touches accounts you administer — every provider acts with your own
 credential.
 
+**CLI** — rotate a GitLab token straight into a `.env` file:
+
+![keyrotator rotating a GitLab token from the CLI](docs/images/cli-rotate.png)
+
+**MCP** — Claude rotating the same token through `keyrotator mcp`; the secret
+never reaches the model:
+
+![Claude rotating a GitLab token via the keyrotator MCP server](docs/images/mcp-rotate.png)
+
 ## Install
 
 Requires stable [Rust](https://rustup.rs).
