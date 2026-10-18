@@ -42,6 +42,12 @@ pub trait Connector: Send + Sync {
         false
     }
 
+    /// A human name for the account the credential belongs to (e.g. a
+    /// username), shown after logging in so you can tell it's the right one.
+    async fn account_name(&self) -> Option<String> {
+        None
+    }
+
     /// The external id of the credential this connector authenticates with,
     /// when the provider can tell us. Used to avoid rotating or retiring the
     /// key you're logged in with by accident.

@@ -69,7 +69,7 @@ pub fn choose_destination(provider: Provider, secret: &Secret) -> Result<(Vec<Co
         "Save it to a file only you can read",
         "Set a GitHub Actions secret (uses the gh CLI)",
     ];
-    if keyrotator_core::consumers::KEYCHAIN_SUPPORTED {
+    if keyrotator_core::credstore::available() {
         options.push("Store it in your OS keychain");
     }
     options.push("Just show it to me once (not saved anywhere)");
