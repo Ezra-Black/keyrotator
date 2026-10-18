@@ -16,12 +16,13 @@ futures = { workspace = true }
 jsonwebtoken = { workspace = true }
 toml = { workspace = true }
 
-# OS keychain support (the `keychain` consumer) is optional so the crate
-# builds on bare Linux/CI without libsecret/dbus.
+# OS keychain support (saved logins and the `keychain` consumer). On by
+# default; pure Rust on every platform. Build with --no-default-features to
+# leave it out.
 keyring = { version = "2", optional = true }
 
 [features]
-default = []
+default = ["os-keyring"]
 os-keyring = ["dep:keyring"]
 
 [dev-dependencies]

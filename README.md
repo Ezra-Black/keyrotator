@@ -124,15 +124,9 @@ Or install straight from the repo:
 cargo install --path crates/cli
 ```
 
-### OS keychain support
-
-To deliver rotated secrets into your OS keychain (`--keychain`, or a
-`keychain` consumer) — macOS Keychain, Windows Credential Manager, or Linux
-Secret Service — build with the `os-keyring` feature:
-
-```bash
-cargo build --release --features keyrotator-core/os-keyring
-```
+That's it — OS keychain support (for `keyrotator login` and `--keychain`) is
+built in on macOS, Windows and Linux. To leave it out, build with
+`--no-default-features` on `keyrotator-core`.
 
 ### Tools some providers shell out to
 
@@ -148,15 +142,20 @@ tooling.
 
 ## Quick start
 
-In a terminal, just run:
+Log in once — keyrotator checks the token works and saves it in your OS
+keychain, so it works from every terminal with nothing to `export`:
+
+```bash
+keyrotator login gitlab
+```
+
+Then rotate:
 
 ```bash
 keyrotator rotate gitlab
 ```
 
-keyrotator walks you through it: it asks for your GitLab token if
-`GITLAB_TOKEN` isn't set (hidden input, with a link to where you create one),
-lets you pick which token to rotate, asks where the new one should go (a `.env`
+keyrotator walks you through it: it lets you pick which token to rotate, asks where the new one should go (a `.env`
 file, a private file, a GitHub Actions secret, your keychain, or just shown
 once), shows exactly what's about to happen, and waits for your OK. It can
 remember where each key goes, so the next rotation is one command and one
@@ -178,15 +177,33 @@ For anything you rotate more than once, describe its consumers in a
 keyrotator rotate-all gitlab
 ```
 
-Each provider reads its credentials from environment variables (never from the
-command line, so nothing sensitive lands in your shell history). The
-[per-provider setup](#per-provider-setup) section lists exactly which ones.
+### Where credentials come from
+
+keyrotator looks for each provider credential in this order:
+
+1. **An environment variable** (e.g. `GITLAB_TOKEN`) — for CI and one-off
+   overrides. Remember `export`; a plain `VAR=...` line isn't visible to
+   programs you run.
+2. **A saved login** from `keyrotator login <provider>`, kept in your OS
+   keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+3. **Asking you**, in a terminal — and offering to save what you type.
+
+Credentials are never taken as command-line flags, so nothing sensitive lands
+in your shell history. `keyrotator login` with no provider shows what's set;
+`keyrotator logout <provider>` removes a saved login. If you rotate the very
+token keyrotator signs in with (GitLab, Cloudflare), a saved login is updated
+to the new token automatically. The
+[per-provider setup](#per-provider-setup) section lists each provider's
+variables. Set `KEYROTATOR_DISABLE_KEYCHAIN=1` to keep keyrotator away from the
+keychain entirely (e.g. in CI).
 
 ---
 
 ## Commands
 
 ```
+keyrotator login       [provider]                 save credentials in your OS keychain
+keyrotator logout      <provider>                 remove saved credentials
 keyrotator connect     <provider>                 check credentials and access
 keyrotator list        <provider>                 list keys and their ids
 keyrotator rotate      <provider> <id> [dest...]  rotate one key
@@ -214,7 +231,7 @@ always included):
 | `--dotenv <path>[:<VAR>]` | sets `VAR` in a `.env` file; `VAR` defaults to the provider's usual name (e.g. `GITLAB_TOKEN`; for AWS both `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`). Repeatable |
 | `--gh-secret <owner/repo>:<NAME>` | a GitHub Actions secret via `gh` (repeatable) |
 | `--ssm <name>:<region>` | an AWS SSM `SecureString` (repeatable) |
-| `--keychain` | the OS keychain, service `keyrotator` (needs `os-keyring`) |
+| `--keychain` | the OS keychain, service `keyrotator` |
 | `--secret-dir <dir>` | `rotate-all` only: one 0600 file per key |
 
 Other options:
@@ -462,7 +479,7 @@ A "consumer" is any place that uses a key and must be updated when it rotates:
 - **GitHub Actions secrets** — via `gh secret set`.
 - **AWS SSM Parameter Store** — as a `SecureString`.
 - **A file** — the raw secret, owner-only.
-- **The OS keychain** — with the `os-keyring` feature.
+- **The OS keychain**.
 
 Describe them once in `keyrotator.toml` (in the current directory, or
 `~/.config/keyrotator/config.toml`). See
@@ -500,13 +517,15 @@ consumers each key has.
 server on stdio, so Claude and other MCP clients can check, list and rotate
 your keys.
 
+Run `keyrotator login <provider>` first: the server reads saved logins from
+your keychain, so no token has to go into your MCP client's config file.
+
 ```json
 {
   "mcpServers": {
     "keyrotator": {
       "command": "keyrotator",
-      "args": ["mcp", "--config", "/Users/me/.config/keyrotator/config.toml"],
-      "env": { "GITLAB_TOKEN": "glpat-…" }
+      "args": ["mcp", "--config", "/Users/me/.config/keyrotator/config.toml"]
     }
   }
 }
@@ -515,8 +534,12 @@ your keys.
 With Claude Code:
 
 ```bash
-claude mcp add keyrotator -- keyrotator mcp
+claude mcp add keyrotator -- keyrotator mcp --config ~/.config/keyrotator/config.toml
 ```
+
+(On macOS, the first time the server reads a saved login after you install or
+update keyrotator, the Keychain may ask you to allow it — choose
+**Always Allow**.)
 
 | Tool | Available | What it does |
 |------|-----------|--------------|
@@ -545,6 +568,8 @@ Guardrails, because the assistant is driving:
 
 - New secret values go only to the consumers you configure or pass as flags.
   Nothing is cached by the tool between runs.
+- Provider logins you save with `keyrotator login` live in your OS keychain
+  under the service `keyrotator-login`, never in a file.
 - Files the tool creates (`--secret-file`, `--secret-dir`, rescue files, new
   `.env` files) are owner-only (0600); existing `.env` files keep their
   permissions.
@@ -559,9 +584,14 @@ Guardrails, because the assistant is driving:
 ## Troubleshooting
 
 **`not authorized` on `connect`.**
-Your credential is wrong, expired, or missing a scope. Re-check the env vars for
-that provider in [Per-provider setup](#per-provider-setup). For AWS, your CLI
-session may have expired — run `aws sso login` again.
+Your credential is wrong, expired, or missing a scope. The error says whether it
+came from your environment or your saved login; for a saved login, run
+`keyrotator login <provider>` to replace it. For AWS, your CLI session may have
+expired — run `aws sso login` again.
+
+**It worked yesterday, today it says the token isn't set.**
+An `export` only lasts for that terminal window. Run `keyrotator login
+<provider>` once and it works everywhere.
 
 **`provider limit reached` (AWS).**
 The IAM user already has two access keys. Delete the one you're not using in the

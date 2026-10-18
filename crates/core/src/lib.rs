@@ -5,6 +5,7 @@
 pub mod config;
 pub mod connector;
 pub mod consumers;
+pub mod credstore;
 pub mod engine;
 pub mod models;
 pub mod providers;

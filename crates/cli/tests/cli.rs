@@ -66,7 +66,10 @@ impl FakeGitlab {
                         200,
                         json!([{"id": 1, "name": "admin"}, {"id": 4821, "name": "ci-deploy"}]),
                     ),
-                    ("POST", "/api/v4/personal_access_tokens/4821/rotate") => {
+                    ("POST", p)
+                        if p.starts_with("/api/v4/personal_access_tokens/")
+                            && p.ends_with("/rotate") =>
+                    {
                         (200, json!({"id": 4822, "token": NEW_TOKEN}))
                     }
                     _ => (404, json!({"message": "404 Not Found"})),
@@ -106,8 +109,9 @@ fn keyrotator(gl: &FakeGitlab, cwd: &Path) -> Command {
     cmd.current_dir(cwd)
         .env("GITLAB_URL", &gl.url)
         .env("GITLAB_TOKEN", ADMIN_TOKEN)
-        // Don't pick up a real user config.
+        // Don't pick up a real user config or touch the real keychain.
         .env("XDG_CONFIG_HOME", cwd.join("no-xdg"))
+        .env("KEYROTATOR_TEST_CREDSTORE", cwd.join("credstore.json"))
         .stdin(Stdio::null());
     cmd
 }
@@ -475,4 +479,101 @@ consumers = [{ type = "dot_env_file", path = ".env", variable = "AWS_SECRET_ACCE
         std::fs::read_to_string(dir.join(".env")).unwrap(),
         "AWS_SECRET_ACCESS_KEY=sekret\nAWS_ACCESS_KEY_ID=AKIANEW000000000\n"
     );
+}
+
+fn saved(dir: &Path) -> Value {
+    std::fs::read_to_string(dir.join("credstore.json"))
+        .map(|s| serde_json::from_str(&s).unwrap())
+        .unwrap_or(json!({}))
+}
+
+#[test]
+fn login_saves_credentials_and_later_runs_need_no_export() {
+    let gl = FakeGitlab::start();
+    let dir = tmpdir();
+
+    // A rejected token is never saved.
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env("GITLAB_TOKEN", "glpat-wrong")
+        .args(["login", "gitlab"]));
+    assert!(!out.status.success());
+    assert!(stderr.contains("Nothing was saved"), "{stderr}");
+    assert_eq!(saved(&dir), json!({}));
+
+    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["login", "gitlab"]));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("Logged in to GitLab"), "{stderr}");
+    assert_eq!(saved(&dir)["keyrotator-login/GITLAB_TOKEN"], ADMIN_TOKEN);
+
+    // No GITLAB_TOKEN in the environment: the saved login is used.
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env_remove("GITLAB_TOKEN")
+        .args(["connect", "gitlab"]));
+    assert!(out.status.success(), "{stderr}");
+
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env_remove("GITLAB_TOKEN")
+        .args(["login"]));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("gitlab       saved login"), "{stderr}");
+
+    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["logout", "gitlab"]));
+    assert!(out.status.success(), "{stderr}");
+    assert_eq!(saved(&dir), json!({}));
+
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env_remove("GITLAB_TOKEN")
+        .args(["connect", "gitlab"]));
+    assert!(!out.status.success());
+    assert!(stderr.contains("keyrotator login gitlab"), "{stderr}");
+}
+
+#[test]
+fn rejected_saved_login_says_how_to_fix_it() {
+    let gl = FakeGitlab::start();
+    let dir = tmpdir();
+    std::fs::write(
+        dir.join("credstore.json"),
+        json!({"keyrotator-login/GITLAB_TOKEN": "glpat-revoked"}).to_string(),
+    )
+    .unwrap();
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env_remove("GITLAB_TOKEN")
+        .args(["connect", "gitlab"]));
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("GITLAB_TOKEN from your saved login"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Replace it with: keyrotator login gitlab"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn rotating_the_login_token_updates_the_saved_login() {
+    let gl = FakeGitlab::start();
+    let dir = tmpdir();
+    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["login", "gitlab"]));
+    assert!(out.status.success(), "{stderr}");
+
+    // Token 1 is the one keyrotator signs in with. The saved login counts as a
+    // destination, so no other flag is needed.
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env_remove("GITLAB_TOKEN")
+        .args(["rotate", "gitlab", "1"]));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("saved login will be updated"), "{stderr}");
+    assert!(
+        stderr.contains("Updated: your saved keyrotator login"),
+        "{stderr}"
+    );
+    assert_eq!(saved(&dir)["keyrotator-login/GITLAB_TOKEN"], NEW_TOKEN);
+
+    // And keyrotator keeps working with the new token.
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env_remove("GITLAB_TOKEN")
+        .args(["connect", "gitlab"]));
+    assert!(out.status.success(), "{stderr}");
 }

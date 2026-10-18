@@ -34,7 +34,5 @@ jobs:
       - name: Test
         run: cargo test --all --verbose
 
-      - name: Check OS keychain build
-        run: |
-          sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
-          cargo clippy -p keyrotator-core --features os-keyring --all-targets
+      - name: Check build without keychain support
+        run: cargo clippy -p keyrotator-core --no-default-features --all-targets

@@ -31,6 +31,11 @@ cargo clippy --all-targets
 
 CI runs fmt, clippy, build, and test on every push and PR.
 
+Tests never touch your real keychain: the CLI tests point
+`KEYROTATOR_TEST_CREDSTORE` at a temporary file (a backend that only exists in
+debug builds). Set `KEYROTATOR_DISABLE_KEYCHAIN=1` if you run the binary by
+hand and want it to ignore saved logins.
+
 ## Adding a provider
 
 A provider is one file in `crates/core/src/providers/` implementing the
@@ -53,8 +58,11 @@ A provider is one file in `crates/core/src/providers/` implementing the
    If the provider can tell which key you're authenticated with, implement
    `current_key_id` so `rotate-all` and `retire` can protect it.
 2. **Add the variant** to `ProviderKind` (plus `display_name` and `FromStr`).
-3. **Register it** in `providers/mod.rs` and in the CLI's `build_connector`
-   (read credentials from env vars — never a CLI flag).
+3. **Register it** in `providers/mod.rs`, then in the CLI's
+   `crates/cli/src/providers.rs`: add its credentials to `required_creds`
+   (with a link to where users create them) and construct it in
+   `connector_from`. Credentials come from env vars or a saved login — never
+   a CLI flag.
 4. **Copy the nearest existing connector** as a starting point: `gitlab.rs`
    (REST, atomic), `datadog.rs` / `sendgrid.rs` (REST, overlap), `aws.rs`
    (CLI, overlap), `github_app.rs` (ephemeral, JWT).
