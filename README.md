@@ -37,7 +37,7 @@ keyrotator rotate gitlab 4821 --dotenv .env --yes --no-input
 
 | Command | |
 |---|---|
-| `login [provider]` | Verify and save credentials to the OS keychain. No provider: show status. |
+| `login [provider]` | Opens the provider's token page (GitLab: pre-filled), takes the pasted token, verifies it, saves it to the OS keychain. `--url` for self-hosted GitLab / Datadog site. No provider: show status. |
 | `logout <provider>` | Remove saved credentials (doesn't revoke them). |
 | `connect <provider>` | Check credentials and key-management access. |
 | `list <provider>` | List keys. Column 1 is the id other commands take. |

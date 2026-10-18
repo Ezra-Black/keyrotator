@@ -57,6 +57,10 @@ enum Command {
     Login {
         #[arg(value_enum)]
         provider: Option<Provider>,
+        /// Self-hosted GitLab URL (e.g. https://gitlab.example.com), or the
+        /// Datadog site (e.g. datadoghq.eu).
+        #[arg(long)]
+        url: Option<String>,
     },
     /// Remove a provider's saved credentials (doesn't revoke them).
     Logout {
@@ -231,7 +235,13 @@ fn explain(provider: Provider, e: RotationError) -> anyhow::Error {
         || text.contains("403");
     if auth {
         let p = provider.cli_name();
-        let fix = if credential_source_note(provider).contains("saved login") {
+        let shadowed = providers::env_shadows_saved_login(provider);
+        let fix = if let Some(var) = shadowed {
+            format!(
+                "You also have a saved login, but {var} in this terminal overrides it. \
+                 Run `unset {var}` to use the saved login."
+            )
+        } else if credential_source_note(provider).contains("saved login") {
             format!(
                 "Your saved login may be expired or revoked. Replace it with: keyrotator login {p}"
             )
@@ -323,7 +333,7 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     match cli.command {
-        Command::Login { provider } => login::login(provider, ask).await?,
+        Command::Login { provider, url } => login::login(provider, url, ask).await?,
 
         Command::Logout { provider } => login::logout(provider, ask)?,
 
@@ -331,7 +341,12 @@ async fn run(cli: Cli) -> Result<()> {
             let c = build_connector(provider, ask).await?;
             c.connect().await.map_err(|e| explain(provider, e))?;
             let p = provider.cli_name();
-            eprintln!("✓ Connected to {}.", c.kind().display_name());
+            let who = c
+                .account_name()
+                .await
+                .map(|a| format!(" as {a}"))
+                .unwrap_or_default();
+            eprintln!("✓ Connected to {}{who}.", c.kind().display_name());
             eprintln!(
                 "  Next: `keyrotator list {p}` to see your keys, or `keyrotator rotate {p}`."
             );

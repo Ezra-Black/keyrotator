@@ -147,6 +147,21 @@ impl Connector for GitlabConnector {
         }
     }
 
+    async fn account_name(&self) -> Option<String> {
+        let resp = self
+            .client
+            .get(self.url("/user"))
+            .header("PRIVATE-TOKEN", self.token.as_str())
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let user: GlUser = resp.json().await.ok()?;
+        Some(format!("@{}", user.username))
+    }
+
     async fn current_key_id(&self) -> Option<String> {
         let resp = self
             .client
@@ -195,6 +210,11 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 struct GlToken {
     id: u64,
     name: String,
+}
+
+#[derive(Deserialize)]
+struct GlUser {
+    username: String,
 }
 
 #[derive(Deserialize)]

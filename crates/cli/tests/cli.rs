@@ -497,12 +497,12 @@ fn login_saves_credentials_and_later_runs_need_no_export() {
         .env("GITLAB_TOKEN", "glpat-wrong")
         .args(["login", "gitlab"]));
     assert!(!out.status.success());
-    assert!(stderr.contains("Nothing was saved"), "{stderr}");
+    assert!(stderr.contains("nothing was saved"), "{stderr}");
     assert_eq!(saved(&dir), json!({}));
 
     let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["login", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
-    assert!(stderr.contains("Logged in to GitLab"), "{stderr}");
+    assert!(stderr.contains("Logged in to GitLab as @me"), "{stderr}");
     assert_eq!(saved(&dir)["keyrotator-login/GITLAB_TOKEN"], ADMIN_TOKEN);
 
     // No GITLAB_TOKEN in the environment: the saved login is used.
@@ -576,4 +576,49 @@ fn rotating_the_login_token_updates_the_saved_login() {
         .env_remove("GITLAB_TOKEN")
         .args(["connect", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
+}
+
+#[test]
+fn login_ignores_a_token_from_another_provider() {
+    let gl = FakeGitlab::start();
+    let dir = tmpdir();
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env("GITLAB_TOKEN", "ghp_notagitlabtoken")
+        .args(["login", "gitlab"]));
+    assert!(!out.status.success());
+    assert!(stderr.contains("Ignoring GITLAB_TOKEN"), "{stderr}");
+    assert!(stderr.contains("looks like a GitHub token"), "{stderr}");
+    // Only a prefix of the value is ever shown.
+    assert!(
+        stderr.contains("ghp_no…") && !stderr.contains("ghp_notagitlabtoken"),
+        "{stderr}"
+    );
+    assert_eq!(saved(&dir), json!({}));
+}
+
+#[test]
+fn login_url_is_saved_only_when_not_the_default() {
+    let gl = FakeGitlab::start();
+    let dir = tmpdir();
+    // The fake server stands in for a self-hosted GitLab.
+    let (out, _, stderr) = run(keyrotator(&gl, &dir).env_remove("GITLAB_URL").args([
+        "login",
+        "gitlab",
+        "--url",
+        &format!("{}/", gl.url),
+    ]));
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!("Logging in to GitLab at {}.", gl.url)),
+        "{stderr}"
+    );
+    assert_eq!(saved(&dir)["keyrotator-login/GITLAB_URL"], gl.url.as_str());
+
+    // With the saved URL, nothing else needs to be set.
+    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+        .env_remove("GITLAB_URL")
+        .env_remove("GITLAB_TOKEN")
+        .args(["connect", "gitlab"]));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("Connected to GitLab as @me"), "{stderr}");
 }

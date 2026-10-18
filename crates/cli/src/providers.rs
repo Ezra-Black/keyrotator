@@ -57,13 +57,6 @@ pub struct Cred {
     pub alt: Option<&'static str>,
 }
 
-/// A setting that has a sensible default, offered at `login`.
-pub struct Setting {
-    pub var: &'static str,
-    pub prompt: &'static str,
-    pub default: &'static str,
-}
-
 const fn cred(
     var: &'static str,
     what: &'static str,
@@ -204,20 +197,13 @@ fn optional_vars(p: Provider) -> &'static [&'static str] {
     }
 }
 
-/// Settings worth asking about at `login` (only saved when not the default).
-pub fn login_settings(p: Provider) -> &'static [Setting] {
+/// The one non-secret setting a login can carry — GitLab's URL (self-hosted)
+/// or Datadog's site — and its default. Set with `login --url`.
+pub fn login_setting(p: Provider) -> Option<(&'static str, &'static str)> {
     match p {
-        Provider::Gitlab => &[Setting {
-            var: "GITLAB_URL",
-            prompt: "GitLab URL (change it for self-hosted GitLab)",
-            default: "https://gitlab.com",
-        }],
-        Provider::Datadog => &[Setting {
-            var: "DD_SITE",
-            prompt: "Datadog site",
-            default: "datadoghq.com",
-        }],
-        _ => &[],
+        Provider::Gitlab => Some(("GITLAB_URL", "https://gitlab.com")),
+        Provider::Datadog => Some(("DD_SITE", "datadoghq.com")),
+        _ => None,
     }
 }
 
@@ -297,19 +283,76 @@ impl Resolved {
             .map(|(k, (v, _))| (*k, v.clone()))
             .collect()
     }
-
-    pub fn entries(&self) -> Vec<(&'static str, String)> {
-        self.values
-            .iter()
-            .map(|(k, (v, _))| (*k, v.clone()))
-            .collect()
-    }
 }
 
-/// Ask for one credential: hidden input for secrets.
-pub fn prompt_cred(c: &Cred) -> Result<String> {
+/// The page where this credential is created. GitLab's is pre-filled with a
+/// token name and the `api` scope; `setting` is GITLAB_URL / DD_SITE.
+pub fn cred_page(var: &str, setting: Option<&str>) -> Option<String> {
+    let dd = setting.unwrap_or("datadoghq.com");
+    Some(match var {
+        "GITLAB_TOKEN" => format!(
+            "{}/-/user_settings/personal_access_tokens?name=keyrotator&scopes=api",
+            setting
+                .unwrap_or("https://gitlab.com")
+                .trim_end_matches('/')
+        ),
+        "CLOUDFLARE_API_TOKEN" => "https://dash.cloudflare.com/profile/api-tokens".into(),
+        "DD_API_KEY" => format!("https://app.{dd}/organization-settings/api-keys"),
+        "DD_APP_KEY" => format!("https://app.{dd}/organization-settings/application-keys"),
+        "DOCKERHUB_PASSWORD" => "https://app.docker.com/settings/personal-access-tokens".into(),
+        "OPENAI_ADMIN_KEY" => "https://platform.openai.com/settings/organization/admin-keys".into(),
+        "ANTHROPIC_ADMIN_KEY" => "https://console.anthropic.com/settings/admin-keys".into(),
+        "TWILIO_ACCOUNT_SID" | "TWILIO_AUTH_TOKEN" => "https://console.twilio.com".into(),
+        "SENDGRID_API_KEY" => "https://app.sendgrid.com/settings/api_keys".into(),
+        "GITHUB_APP_ID" => "https://github.com/settings/apps".into(),
+        _ => return None,
+    })
+}
+
+/// Open a URL in the default browser. Returns false if that didn't work.
+pub fn open_browser(url: &str) -> bool {
+    let mut cmd = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    cmd.arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The first few characters of a value — enough to recognize it, not use it.
+pub fn masked(value: &str) -> String {
+    let head: String = value.chars().take(6).collect();
+    format!("{head}…")
+}
+
+/// Ask for one credential. For secrets: offer to open the page where it's
+/// created, then read it with hidden input.
+pub fn ask_for_cred(c: &Cred, setting: Option<&str>) -> Result<String> {
     eprintln!("keyrotator needs {} ({}).", c.what, c.var);
-    eprintln!("  Get one: {}", c.where_);
+    match cred_page(c.var, setting) {
+        Some(url) => {
+            eprintln!("  Create one here: {url}");
+            if c.var == "GITLAB_TOKEN" {
+                eprintln!("  (The name and `api` scope are filled in — click \"Create token\", then copy it.)");
+            }
+            let open = dialoguer::Confirm::new()
+                .with_prompt("Open that page in your browser?")
+                .default(true)
+                .interact()?;
+            if open && !open_browser(&url) {
+                eprintln!("  Couldn't open a browser — copy the link above instead.");
+            }
+        }
+        None => eprintln!("  Where to find it: {}", c.where_),
+    }
     let v = if c.secret {
         dialoguer::Password::new()
             .with_prompt("Paste it here (input is hidden)")
@@ -320,7 +363,9 @@ pub fn prompt_cred(c: &Cred) -> Result<String> {
             .interact_text()?
     };
     let v = v.trim().to_string();
-    warn_shape(c, &v);
+    if let Some(problem) = shape_problem(c, &v) {
+        eprintln!("Warning: {problem}");
+    }
     Ok(v)
 }
 
@@ -357,7 +402,8 @@ pub fn resolve(p: Provider, ask: bool) -> Result<Resolved> {
             }
             None if ask => {
                 eprintln!("You're not logged in to {} yet.", p.display_name());
-                let v = prompt_cred(&c)?;
+                let setting = r.get("GITLAB_URL").or_else(|| r.get("DD_SITE"));
+                let v = ask_for_cred(&c, setting.as_deref())?;
                 r.insert(c.var, v, Source::Prompt);
             }
             None => return Err(missing(p, &c)),
@@ -367,15 +413,15 @@ pub fn resolve(p: Provider, ask: bool) -> Result<Resolved> {
     Ok(r)
 }
 
-/// Warn (never fail) when a value looks like it belongs to another service —
-/// e.g. a GitHub token in GITLAB_TOKEN.
-fn warn_shape(c: &Cred, value: &str) {
+/// When a value looks like it belongs to another service (e.g. a GitHub
+/// token in GITLAB_TOKEN), say so.
+pub fn shape_problem(c: &Cred, value: &str) -> Option<String> {
     if c.prefixes.is_empty() || c.prefixes.iter().any(|p| value.starts_with(p)) {
-        return;
+        return None;
     }
     let known: &[(&str, &str)] = &[
-        ("ghp_", "a GitHub personal access token"),
-        ("github_pat_", "a GitHub personal access token"),
+        ("ghp_", "a GitHub token"),
+        ("github_pat_", "a GitHub token"),
         ("glpat-", "a GitLab token"),
         ("sk-ant-admin", "an Anthropic admin key"),
         ("sk-ant-", "an Anthropic API key"),
@@ -389,11 +435,18 @@ fn warn_shape(c: &Cred, value: &str) {
         .find(|(p, _)| value.starts_with(p))
         .map(|(_, name)| format!(" It looks like {name}."))
         .unwrap_or_default();
-    eprintln!(
-        "Warning: {} doesn't look right — expected it to start with {}.{looks}",
+    Some(format!(
+        "{} ({}) doesn't look right — expected it to start with {}.{looks}",
         c.var,
+        masked(value),
         c.prefixes.join(" or ")
-    );
+    ))
+}
+
+fn warn_shape(c: &Cred, value: &str) {
+    if let Some(problem) = shape_problem(c, value) {
+        eprintln!("Warning: {problem}");
+    }
 }
 
 /// Construct a connector from resolved credentials.
@@ -503,6 +556,13 @@ pub fn shellexpand_home(path: &str) -> String {
         (Some(rest), Ok(home)) => format!("{home}/{rest}"),
         _ => path.to_string(),
     }
+}
+
+/// A credential taken from the environment while a saved login also exists.
+pub fn env_shadows_saved_login(p: Provider) -> Option<&'static str> {
+    required_creds(p).into_iter().map(|c| c.var).find(|var| {
+        source_of(var) == Some(Source::Env) && credstore::get(LOGIN_SERVICE, var).is_some()
+    })
 }
 
 /// Where this run's credentials came from, for "rejected" error messages.

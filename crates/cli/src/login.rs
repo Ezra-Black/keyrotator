@@ -4,12 +4,12 @@
 
 use anyhow::Result;
 use clap::ValueEnum;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Select};
 use keyrotator_core::credstore::{self, LOGIN_SERVICE};
 
 use crate::providers::{
-    connector_from, login_settings, login_vars, prompt_cred, required_creds, save_login,
-    shellexpand_home, Provider, Resolved, Source,
+    ask_for_cred, connector_from, login_setting, login_vars, masked, required_creds, save_login,
+    shape_problem, shellexpand_home, Provider, Resolved, Source,
 };
 
 fn env(k: &str) -> Option<String> {
@@ -61,7 +61,7 @@ fn ensure_store() -> Result<()> {
     )
 }
 
-pub async fn login(provider: Option<Provider>, ask: bool) -> Result<()> {
+pub async fn login(provider: Option<Provider>, url: Option<String>, ask: bool) -> Result<()> {
     ensure_store()?;
     let p = match provider {
         Some(p) => p,
@@ -96,93 +96,146 @@ pub async fn login(provider: Option<Provider>, ask: bool) -> Result<()> {
             Provider::Aws => "`aws sso login` (or a configured profile)",
             _ => "`npm login`",
         };
-        eprintln!("{name} uses its own CLI's login, so there's nothing for keyrotator to save. Sign in with {how}.");
+        eprintln!(
+            "{name} uses its own CLI's login, so there's nothing for keyrotator to save. \
+             Sign in with {how}."
+        );
         return Ok(());
     }
 
-    eprintln!(
-        "Logging in to {name}. keyrotator saves this to {} so it works from any terminal.\n",
-        credstore::place()
-    );
-    let mut r = Resolved::default();
+    // GitLab URL / Datadog site: --url, else environment, else saved. Never asked.
+    let setting_def = login_setting(p);
+    if url.is_some() && setting_def.is_none() {
+        anyhow::bail!("--url only applies to gitlab (self-hosted URL) and datadog (site)");
+    }
+    let setting: Option<String> = url
+        .map(|u| u.trim().trim_end_matches('/').to_string())
+        .or_else(|| {
+            setting_def.and_then(|(var, _)| env(var).or_else(|| credstore::get(LOGIN_SERVICE, var)))
+        });
+    match (&setting, setting_def) {
+        (Some(s), Some((_, default))) if s != default => eprintln!("Logging in to {name} at {s}."),
+        _ => eprintln!("Logging in to {name}."),
+    }
+
+    // Offer credentials already exported in this terminal — unless they look
+    // like another provider's.
+    let mut values: Vec<(&'static str, String)> = Vec::new();
     for c in &creds {
-        if c.alt.is_some_and(|a| env(a).is_some()) {
-            let alt = c.alt.unwrap();
-            r.insert(alt, env(alt).unwrap(), Source::Prompt);
+        if let Some(alt) = c.alt.filter(|a| env(a).is_some()) {
+            values.push((alt, env(alt).unwrap()));
             continue;
         }
-        let value = match (env(c.var), ask) {
-            (Some(v), true)
-                if Confirm::new()
-                    .with_prompt(format!("Use the {} that's set in this terminal?", c.var))
-                    .default(true)
-                    .interact()? =>
-            {
-                v
-            }
-            (Some(v), false) => v,
-            (_, true) => prompt_cred(c)?,
-            (None, false) => anyhow::bail!(
-                "{} isn't set. Run this in a terminal to be asked for it, or set it first: \
-                 {}=... keyrotator login {}",
-                c.var,
-                c.var,
-                p.cli_name()
-            ),
-        };
-        let value = if c.var.ends_with("_PATH") {
-            shellexpand_home(&value)
-        } else {
-            value
-        };
-        r.insert(c.var, value, Source::Prompt);
-    }
-
-    let mut clear = Vec::new();
-    for s in login_settings(p) {
-        let current = env(s.var)
-            .or_else(|| credstore::get(LOGIN_SERVICE, s.var))
-            .unwrap_or_else(|| s.default.to_string());
-        let value = if ask {
-            Input::<String>::new()
-                .with_prompt(s.prompt)
-                .default(current)
-                .interact_text()?
-        } else {
-            current
-        };
-        if value.trim() == s.default {
-            clear.push(s.var);
-        } else {
-            r.insert(s.var, value.trim().to_string(), Source::Prompt);
+        let Some(v) = env(c.var) else { continue };
+        if let Some(problem) = shape_problem(c, &v) {
+            eprintln!("Ignoring {} from this terminal: {problem}", c.var);
+            continue;
+        }
+        let use_it = !ask
+            || Confirm::new()
+                .with_prompt(format!(
+                    "Found {} in this terminal ({}). Use it?",
+                    c.var,
+                    masked(&v)
+                ))
+                .default(true)
+                .interact()?;
+        if use_it {
+            values.push((c.var, v));
         }
     }
 
-    eprintln!("Checking with {name}…");
-    let connector = connector_from(p, &r)?;
-    if let Err(e) = connector.connect().await {
-        anyhow::bail!(
-            "{name} didn't accept it: {e}\nNothing was saved. Check the value and its \
-             permissions, then run `keyrotator login {}` again.",
-            p.cli_name()
-        );
+    loop {
+        for c in &creds {
+            let have = |var: &str| values.iter().any(|(k, _)| *k == var);
+            if have(c.var) || c.alt.is_some_and(have) {
+                continue;
+            }
+            if !ask {
+                anyhow::bail!(
+                    "{} isn't set (or doesn't look like {}). Run `keyrotator login {}` in a \
+                     terminal to be asked for it.",
+                    c.var,
+                    c.what,
+                    p.cli_name()
+                );
+            }
+            eprintln!();
+            let v = ask_for_cred(c, setting.as_deref())?;
+            let v = if c.var.ends_with("_PATH") {
+                shellexpand_home(&v)
+            } else {
+                v
+            };
+            values.push((c.var, v));
+        }
+
+        let mut r = Resolved::default();
+        for (k, v) in &values {
+            r.insert(k, v.clone(), Source::Prompt);
+        }
+        if let (Some(s), Some((var, _))) = (&setting, setting_def) {
+            r.insert(var, s.clone(), Source::Prompt);
+        }
+
+        eprintln!("Checking with {name}…");
+        let connector = connector_from(p, &r)?;
+        match connector.connect().await {
+            Ok(()) => {
+                let who = connector
+                    .account_name()
+                    .await
+                    .map(|a| format!(" as {a}"))
+                    .unwrap_or_default();
+                save_login(&values)?;
+                if let Some((var, default)) = setting_def {
+                    match &setting {
+                        Some(s) if s != default => save_login(&[(var, s.clone())])?,
+                        _ => {
+                            let _ = credstore::delete(LOGIN_SERVICE, var);
+                        }
+                    }
+                }
+                eprintln!(
+                    "✓ Logged in to {name}{who}. Saved to {}.\n  keyrotator now works from any \
+                     terminal — nothing to export.",
+                    credstore::place()
+                );
+                for (var, saved) in &values {
+                    if env(var).is_some_and(|e| e != *saved) {
+                        eprintln!(
+                            "  Note: a different {var} is still exported in this terminal and \
+                             takes priority. Run `unset {var}` to use the saved login."
+                        );
+                    }
+                }
+                eprintln!("\nNext: keyrotator list {}", p.cli_name());
+                return Ok(());
+            }
+            Err(e) => {
+                let text = e.to_string();
+                let why = if text.contains("401") {
+                    "the token is invalid, expired, or revoked".to_string()
+                } else if text.contains("403") {
+                    "the token works but doesn't have permission to manage keys (check its \
+                     scopes)"
+                        .to_string()
+                } else {
+                    text
+                };
+                eprintln!("✗ {name} didn't accept it: {why}.");
+                let retry = ask
+                    && Confirm::new()
+                        .with_prompt("Try a different one?")
+                        .default(true)
+                        .interact()?;
+                if !retry {
+                    anyhow::bail!("not logged in — nothing was saved");
+                }
+                values.clear();
+            }
+        }
     }
-    save_login(&r.entries())?;
-    for var in clear {
-        let _ = credstore::delete(LOGIN_SERVICE, var);
-    }
-    let vars: Vec<&str> = creds.iter().map(|c| c.var).collect();
-    eprintln!(
-        "✓ Logged in to {name}. Saved to {}.\n\
-         \n  keyrotator now works from any terminal — no export needed.\
-         \n  (If {} is also set in your environment, that value wins.)\
-         \n  Remove it with: keyrotator logout {p}\
-         \n\nNext: keyrotator list {p}",
-        credstore::place(),
-        vars.join(" / "),
-        p = p.cli_name()
-    );
-    Ok(())
 }
 
 pub fn logout(provider: Option<Provider>, ask: bool) -> Result<()> {
