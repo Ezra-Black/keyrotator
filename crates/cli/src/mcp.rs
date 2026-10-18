@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use clap::ValueEnum;
-use keyrotator_core::{Consumer, RotationEngine, RotationStyle};
+use rekey_core::{Consumer, RotationEngine, RotationStyle};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -91,10 +91,10 @@ fn initialize(params: &Value) -> Value {
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
-        "serverInfo": { "name": "keyrotator", "version": env!("CARGO_PKG_VERSION") },
+        "serverInfo": { "name": "rekey", "version": env!("CARGO_PKG_VERSION") },
         "instructions": "Rotates API keys for accounts the user administers. Call list_keys to \
             get key ids. rotate_key only delivers new secrets to consumers configured in the \
-            user's keyrotator.toml and never returns secret values. Confirm with the user \
+            user's rekey.toml and never returns secret values. Confirm with the user \
             before rotating or retiring keys.",
     })
 }
@@ -143,7 +143,7 @@ fn tools(opts: &Options) -> Vec<Value> {
         tools.push(json!({
             "name": "rotate_key",
             "description": "Rotate one key: mint a new one, deliver it to the consumers \
-                configured for this key in keyrotator.toml, verify it, then deactivate the old \
+                configured for this key in rekey.toml, verify it, then deactivate the old \
                 key where possible. Refuses keys with no configured consumers. Never returns \
                 the secret value.",
             "inputSchema": {
@@ -306,7 +306,7 @@ async fn rotate_key(opts: &Options, args: &Value) -> Result<Value> {
     let config = ops::load_config(opts.config.as_deref())?;
     let Some((config_path, config)) = config else {
         anyhow::bail!(
-            "no keyrotator.toml found. Over MCP, new secrets can only be delivered to \
+            "no rekey.toml found. Over MCP, new secrets can only be delivered to \
              consumers the user has configured; ask them to add this key to the config."
         );
     };
@@ -365,7 +365,7 @@ async fn retire_key(args: &Value) -> Result<Value> {
     if c.current_key_id().await.as_deref() == Some(id) {
         anyhow::bail!(
             "{id} is the key this server is signed in with; retiring it over MCP is refused. \
-             The user can run `keyrotator retire` themselves."
+             The user can run `rekey retire` themselves."
         );
     }
     ops::find_key(&c, id).await?;

@@ -1,5 +1,5 @@
 name: Provider request
-description: Ask for keyrotator to support another platform's keys or tokens.
+description: Ask for rekey to support another platform's keys or tokens.
 title: "Provider: "
 labels: ["provider-request"]
 body:
@@ -37,7 +37,7 @@ body:
     id: consumers
     attributes:
       label: Where the key is used
-      description: Any destination keyrotator should update (e.g. Vercel env vars, Kubernetes secrets).
+      description: Any destination rekey should update (e.g. Vercel env vars, Kubernetes secrets).
   - type: checkboxes
     id: pr
     attributes:

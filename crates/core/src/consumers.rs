@@ -195,7 +195,7 @@ pub(crate) fn write_private(path: &Path, contents: &[u8]) -> Result<(), Rotation
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "secret".into());
-    let tmp = dir.join(format!(".{name}.keyrotator-{}.tmp", uuid::Uuid::new_v4()));
+    let tmp = dir.join(format!(".{name}.rekey-{}.tmp", uuid::Uuid::new_v4()));
 
     let existing_perms = fs::metadata(&target).ok().map(|m| m.permissions());
 

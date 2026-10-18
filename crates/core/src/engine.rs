@@ -145,7 +145,7 @@ impl RotationEngine {
             // Both keys work, so nothing is broken — leave the old one alone.
             outcome.problems.push(format!(
                 "Old key {} left active because {} consumer(s) still need the new key. \
-                 Fix them, then run `keyrotator retire`.",
+                 Fix them, then run `rekey retire`.",
                 secret.external_id,
                 outcome.failed_consumers.len()
             ));
@@ -309,7 +309,7 @@ impl RotationEngine {
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect();
         let path = self.rescue_dir.join(format!(
-            "keyrotator-rescue-{:?}-{safe_id}.secret",
+            "rekey-rescue-{:?}-{safe_id}.secret",
             secret.provider
         ));
         match write_private(&path, format!("{}\n", cred.secret_value).as_bytes()) {

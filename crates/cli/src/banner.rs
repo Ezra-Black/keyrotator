@@ -1,4 +1,4 @@
-//! The credits box: shown once, the first time keyrotator runs in a terminal,
+//! The credits box: shown once, the first time rekey runs in a terminal,
 //! and at the end of `--help`. Never printed to stdout, in scripts, or over MCP.
 
 use std::io::IsTerminal;
@@ -10,7 +10,7 @@ pub const AUTHOR_URL: &str = "https://www.ezrablack.dev";
 fn lines() -> [String; 4] {
     [
         format!(
-            "keyrotator v{} — created by Ezra Black",
+            "rekey v{} — created by Ezra Black",
             env!("CARGO_PKG_VERSION")
         ),
         String::new(),
@@ -40,7 +40,7 @@ fn marker() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("keyrotator").join(".welcome-shown"))
+    Some(base.join("rekey").join(".welcome-shown"))
 }
 
 /// Show the box on the first interactive run, then remember that we did.

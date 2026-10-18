@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use keyrotator_core::connector::Connector;
-use keyrotator_core::models::{
+use rekey_core::connector::Connector;
+use rekey_core::models::{
     Consumer, NewCredential, OldKeyState, ProviderKind, RotationError, RotationStyle, Secret,
 };
-use keyrotator_core::RotationEngine;
+use rekey_core::RotationEngine;
 
 /// Records call order so we can assert the engine's sequencing and rollback.
 struct MockConnector {
@@ -100,7 +100,7 @@ fn revealed() -> Secret {
 /// A consumer that always fails: a file inside a directory that doesn't exist.
 fn broken() -> Consumer {
     Consumer::File {
-        path: "/nonexistent-keyrotator-dir/x/secret".into(),
+        path: "/nonexistent-rekey-dir/x/secret".into(),
     }
 }
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use keyrotator_core::{Config, Connector, Consumer, OldKeyState, RotationOutcome, Secret};
+use rekey_core::{Config, Connector, Consumer, OldKeyState, RotationOutcome, Secret};
 
 use crate::providers::Provider;
 
@@ -17,7 +17,7 @@ pub async fn find_key(connector: &Arc<dyn Connector>, id: &str) -> Result<Secret
     let keys = connector.list_keys().await?;
     keys.into_iter()
         .find(|s| s.external_id == id)
-        .with_context(|| format!("no key with id {id} for this account (see `keyrotator list`)"))
+        .with_context(|| format!("no key with id {id} for this account (see `rekey list`)"))
 }
 
 /// Attach the consumers configured for each key.
@@ -31,7 +31,7 @@ pub fn attach_config(keys: &mut [Secret], config: Option<&Config>) {
 
 pub fn keychain_consumer(provider: Provider, secret: &Secret) -> Consumer {
     Consumer::Keychain {
-        service: "keyrotator".into(),
+        service: "rekey".into(),
         account: format!("{}:{}", provider.cli_name(), secret.label),
     }
 }
@@ -59,12 +59,12 @@ pub fn outcome_lines(provider: Provider, old: &Secret, o: &RotationOutcome) -> V
         OldKeyState::Revoked => "Old token was revoked by the provider.".into(),
         OldKeyState::Deactivated => format!(
             "Old key {old_id} is deactivated (recoverable). Delete it with \
-             `keyrotator retire {p} {old_id} --delete`."
+             `rekey retire {p} {old_id} --delete`."
         ),
         OldKeyState::Deleted => format!("Old key {old_id} deleted."),
         OldKeyState::StillActive => format!(
             "Old key {old_id} is STILL ACTIVE. Once nothing uses it, run \
-             `keyrotator retire {p} {old_id}`."
+             `rekey retire {p} {old_id}`."
         ),
         OldKeyState::NotApplicable => "The previous token expires on its own.".into(),
     });

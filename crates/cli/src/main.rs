@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
-use keyrotator_core::{
+use rekey_core::{
     Connector, Consumer, OldKeyState, RotationEngine, RotationError, RotationStage, RotationStyle,
     Secret,
 };
@@ -23,10 +23,10 @@ use crate::providers::{
 
 const GETTING_STARTED: &str = "\
 Getting started:
-  1. keyrotator login gitlab       save your GitLab token once (works in every terminal)
-  2. keyrotator rotate gitlab      pick a key, choose where the new one goes, done
+  1. rekey login gitlab       save your GitLab token once (works in every terminal)
+  2. rekey rotate gitlab      pick a key, choose where the new one goes, done
 
-In a terminal, keyrotator asks for anything you leave out. Flags can go in any
+In a terminal, rekey asks for anything you leave out. Flags can go in any
 order. Use --no-input in scripts to get errors instead of questions.";
 
 /// Rotate the API keys and tokens for accounts you administer.
@@ -34,10 +34,10 @@ order. Use --no-input in scripts to get errors instead of questions.";
 /// Status messages go to stderr; stdout carries only `list` output and, with
 /// --print-secret, the new secret — so it's safe to capture.
 #[derive(Parser)]
-#[command(name = "keyrotator", version, about)]
+#[command(name = "rekey", version, about)]
 struct Cli {
-    /// Config file with per-key consumers [default: ./keyrotator.toml, then
-    /// ~/.config/keyrotator/config.toml]
+    /// Config file with per-key consumers [default: ./rekey.toml, then
+    /// ~/.config/rekey/config.toml]
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
 
@@ -51,7 +51,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Save a provider's credentials in your OS keychain, so keyrotator works
+    /// Save a provider's credentials in your OS keychain, so rekey works
     /// in any terminal without exporting anything. Run with no provider to
     /// see what's saved.
     Login {
@@ -79,16 +79,16 @@ enum Command {
     },
     /// Rotate one key, delivering the new secret where it's used.
     ///
-    /// The new secret must go somewhere: consumers from keyrotator.toml and/or
+    /// The new secret must go somewhere: consumers from rekey.toml and/or
     /// the destination flags below. In a terminal, anything you leave out —
     /// which key, where it goes — is asked for, with the plan shown before
     /// anything changes.
     #[command(after_help = "\
 Examples:
-  keyrotator rotate gitlab                        asks which key and where it goes
-  keyrotator rotate gitlab 4821 --dotenv .env     writes GITLAB_TOKEN in .env
-  keyrotator rotate gitlab 4821 --dotenv .env:MY_TOKEN --gh-secret me/app:MY_TOKEN
-  keyrotator rotate aws AKIA... --dotenv .env     writes both AWS_ACCESS_KEY_ID and
+  rekey rotate gitlab                        asks which key and where it goes
+  rekey rotate gitlab 4821 --dotenv .env     writes GITLAB_TOKEN in .env
+  rekey rotate gitlab 4821 --dotenv .env:MY_TOKEN --gh-secret me/app:MY_TOKEN
+  rekey rotate aws AKIA... --dotenv .env     writes both AWS_ACCESS_KEY_ID and
                                                   AWS_SECRET_ACCESS_KEY
 
 Flags can go in any order.")]
@@ -173,7 +173,7 @@ struct Destinations {
     /// Print the new secret to stdout.
     #[arg(long)]
     print_secret: bool,
-    /// Store the new secret in the OS keychain (service "keyrotator").
+    /// Store the new secret in the OS keychain (service "rekey").
     #[arg(long)]
     keychain: bool,
 }
@@ -197,7 +197,7 @@ fn split_last<'a>(s: &'a str, flag: &str, shape: &str) -> Result<(&'a str, &'a s
         .with_context(|| format!("--{flag} expects {shape}, got '{s}'"))
 }
 
-fn progress() -> keyrotator_core::engine::ProgressFn {
+fn progress() -> rekey_core::engine::ProgressFn {
     Arc::new(|_id, stage: RotationStage, msg: &str| {
         let tag = match stage {
             RotationStage::Done => "✓",
@@ -242,13 +242,11 @@ fn explain(provider: Provider, e: RotationError) -> anyhow::Error {
                  Run `unset {var}` to use the saved login."
             )
         } else if credential_source_note(provider).contains("saved login") {
-            format!(
-                "Your saved login may be expired or revoked. Replace it with: keyrotator login {p}"
-            )
+            format!("Your saved login may be expired or revoked. Replace it with: rekey login {p}")
         } else {
             format!(
                 "Check the value is current (not expired or revoked) and has permission to \
-                 manage keys. `keyrotator connect {p}` tests just that."
+                 manage keys. `rekey connect {p}` tests just that."
             )
         };
         anyhow::anyhow!(
@@ -280,9 +278,7 @@ fn select_key(
             .into_iter()
             .find(|k| k.external_id == id)
             .with_context(|| {
-                format!(
-                    "no key with id {id} in this account. See the ids with: keyrotator list {p}"
-                )
+                format!("no key with id {id} in this account. See the ids with: rekey list {p}")
             }),
         None if ask => interactive::pick_key(provider, keys, current, verb),
         None => {
@@ -298,7 +294,7 @@ fn select_key(
                 .unwrap_or_else(|| "12345".into());
             anyhow::bail!(
                 "which key? Your {p} keys are:\n{}\n\nPass the id, for example:\n  \
-                 keyrotator {verb} {p} {example}",
+                 rekey {verb} {p} {example}",
                 listed.join("\n")
             )
         }
@@ -347,9 +343,7 @@ async fn run(cli: Cli) -> Result<()> {
                 .map(|a| format!(" as {a}"))
                 .unwrap_or_default();
             eprintln!("✓ Connected to {}{who}.", c.kind().display_name());
-            eprintln!(
-                "  Next: `keyrotator list {p}` to see your keys, or `keyrotator rotate {p}`."
-            );
+            eprintln!("  Next: `rekey list {p}` to see your keys, or `rekey rotate {p}`.");
         }
 
         Command::List { provider } => {
@@ -394,7 +388,7 @@ async fn run(cli: Cli) -> Result<()> {
                     .find(|k| current.as_deref() != Some(k.external_id.as_str()))
                     .unwrap_or(&keys[0]);
                 eprintln!(
-                    "\nRotate one with: keyrotator rotate {} {}   (or leave out the ID to pick from a list)",
+                    "\nRotate one with: rekey rotate {} {}   (or leave out the ID to pick from a list)",
                     provider.cli_name(),
                     example.external_id
                 );
@@ -457,35 +451,35 @@ async fn run(cli: Cli) -> Result<()> {
                 });
             }
 
-            // Rotating the token keyrotator itself signs in with: keep a saved
+            // Rotating the token rekey itself signs in with: keep a saved
             // login pointing at the new token so you aren't locked out.
             if current.as_deref() == Some(secret.external_id.as_str()) {
                 let n = guide::noun(provider);
                 match login_token_var(provider).map(|v| (v, providers::source_of(v))) {
                     Some((var, Some(Source::Saved | Source::Prompt)))
-                        if keyrotator_core::credstore::get(
-                            keyrotator_core::credstore::LOGIN_SERVICE,
+                        if rekey_core::credstore::get(
+                            rekey_core::credstore::LOGIN_SERVICE,
                             var,
                         )
                         .is_some() =>
                     {
                         eprintln!(
-                            "This is the {n} keyrotator signs in with. Your saved login will be \
+                            "This is the {n} rekey signs in with. Your saved login will be \
                              updated to the new {n} automatically."
                         );
                         secret.consumers.push(Consumer::Keychain {
-                            service: keyrotator_core::credstore::LOGIN_SERVICE.into(),
+                            service: rekey_core::credstore::LOGIN_SERVICE.into(),
                             account: var.into(),
                         });
                     }
                     Some((var, _)) => eprintln!(
-                        "Heads up: this is the {n} keyrotator signs in with ({var}). After \
-                         rotating, update {var} to the new value — or run `keyrotator login {}` \
-                         so keyrotator keeps track of it for you.",
+                        "Heads up: this is the {n} rekey signs in with ({var}). After \
+                         rotating, update {var} to the new value — or run `rekey login {}` \
+                         so rekey keeps track of it for you.",
                         provider.cli_name()
                     ),
                     None => eprintln!(
-                        "Heads up: this is the {n} keyrotator signs in with ({}). After \
+                        "Heads up: this is the {n} rekey signs in with ({}). After \
                          rotating, update it to the new value.",
                         secret.label
                     ),
@@ -526,8 +520,8 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
                 .map_err(|e| match e {
                     RotationError::NoDestination(_) => anyhow::anyhow!(
-                        "{e}\n\nFor example:\n  keyrotator rotate {p} {id} --dotenv .env\n  \
-                         keyrotator rotate {p} {id} --secret-file ./{p}.secret\n\
+                        "{e}\n\nFor example:\n  rekey rotate {p} {id} --dotenv .env\n  \
+                         rekey rotate {p} {id} --secret-file ./{p}.secret\n\
                          Or run it in a terminal without --no-input and it'll ask.",
                         p = provider.cli_name(),
                         id = secret.external_id
@@ -573,8 +567,8 @@ async fn run(cli: Cli) -> Result<()> {
             for mut k in keys {
                 if current.as_deref() == Some(k.external_id.as_str()) {
                     eprintln!(
-                        "Skipping {} ({}): it's the key keyrotator is signed in with. \
-                         Rotate it on its own with `keyrotator rotate {p} {}`.",
+                        "Skipping {} ({}): it's the key rekey is signed in with. \
+                         Rotate it on its own with `rekey rotate {p} {}`.",
                         k.label, k.external_id, k.external_id
                     );
                     continue;
@@ -590,7 +584,7 @@ async fn run(cli: Cli) -> Result<()> {
                 if k.consumers.is_empty() {
                     eprintln!(
                         "Skipping {} ({}): nowhere to deliver its new secret. Set it up once \
-                         with `keyrotator rotate {p} {}` (it asks where it goes and can \
+                         with `rekey rotate {p} {}` (it asks where it goes and can \
                          remember), or pass --secret-dir / --print-secret / --keychain.",
                         k.label, k.external_id, k.external_id
                     );
@@ -658,7 +652,7 @@ async fn run(cli: Cli) -> Result<()> {
                 secret.label
             );
             if current.as_deref() == Some(id.as_str()) {
-                question.push_str(" It's also the key keyrotator is signed in with!");
+                question.push_str(" It's also the key rekey is signed in with!");
             }
             question.push_str(" Continue?");
             confirm(&question, yes, ask, false)?;
@@ -670,7 +664,7 @@ async fn run(cli: Cli) -> Result<()> {
             match state {
                 OldKeyState::Deactivated => eprintln!(
                     "✓ {} ({id}) is switched off. You can switch it back on in the provider's \
-                     console, or delete it for good with: keyrotator retire {} {id} --delete",
+                     console, or delete it for good with: rekey retire {} {id} --delete",
                     secret.label,
                     provider.cli_name()
                 ),

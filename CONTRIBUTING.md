@@ -22,7 +22,7 @@ self-contained and easy to review.
 
 ```bash
 git clone https://github.com/Ezra-Black/keyrotator.git
-cd keyrotator
+cd rekey
 cargo build
 cargo test
 cargo fmt --all
@@ -32,8 +32,8 @@ cargo clippy --all-targets
 CI runs fmt, clippy, build, and test on every push and PR.
 
 Tests never touch your real keychain: the CLI tests point
-`KEYROTATOR_TEST_CREDSTORE` at a temporary file (a backend that only exists in
-debug builds). Set `KEYROTATOR_DISABLE_KEYCHAIN=1` if you run the binary by
+`REKEY_TEST_CREDSTORE` at a temporary file (a backend that only exists in
+debug builds). Set `REKEY_DISABLE_KEYCHAIN=1` if you run the binary by
 hand and want it to ignore saved logins.
 
 ## Adding a provider

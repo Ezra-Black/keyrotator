@@ -104,14 +104,14 @@ fn tmpdir() -> PathBuf {
     d
 }
 
-fn keyrotator(gl: &FakeGitlab, cwd: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_keyrotator"));
+fn rekey(gl: &FakeGitlab, cwd: &Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_rekey"));
     cmd.current_dir(cwd)
         .env("GITLAB_URL", &gl.url)
         .env("GITLAB_TOKEN", ADMIN_TOKEN)
         // Don't pick up a real user config or touch the real keychain.
         .env("XDG_CONFIG_HOME", cwd.join("no-xdg"))
-        .env("KEYROTATOR_TEST_CREDSTORE", cwd.join("credstore.json"))
+        .env("REKEY_TEST_CREDSTORE", cwd.join("credstore.json"))
         .stdin(Stdio::null());
     cmd
 }
@@ -127,7 +127,7 @@ fn run(cmd: &mut Command) -> (Output, String, String) {
 fn rotate_without_destination_refuses_before_touching_the_provider() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["rotate", "gitlab", "4821"]));
+    let (out, _, stderr) = run(rekey(&gl, &dir).args(["rotate", "gitlab", "4821"]));
     assert!(!out.status.success());
     assert!(stderr.contains("nowhere to put the new secret"), "{stderr}");
     assert_eq!(gl.rotate_calls(), 0);
@@ -138,7 +138,7 @@ fn rotate_print_secret_puts_only_the_secret_on_stdout() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
     let (out, stdout, stderr) =
-        run(keyrotator(&gl, &dir).args(["rotate", "gitlab", "4821", "--print-secret"]));
+        run(rekey(&gl, &dir).args(["rotate", "gitlab", "4821", "--print-secret"]));
     assert!(out.status.success(), "{stderr}");
     assert_eq!(stdout, format!("{NEW_TOKEN}\n"));
     assert!(stderr.contains("New key id: 4822"), "{stderr}");
@@ -151,7 +151,7 @@ fn rotate_updates_dotenv_and_secret_file() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
     std::fs::write(dir.join(".env"), "A=1\nGITLAB_TOKEN=old\n").unwrap();
-    let (out, stdout, stderr) = run(keyrotator(&gl, &dir).args([
+    let (out, stdout, stderr) = run(rekey(&gl, &dir).args([
         "rotate",
         "gitlab",
         "4821",
@@ -177,7 +177,7 @@ fn rotate_uses_consumers_from_config_matched_by_name() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
     std::fs::write(
-        dir.join("keyrotator.toml"),
+        dir.join("rekey.toml"),
         r#"
 [[keys]]
 provider = "gitlab"
@@ -186,7 +186,7 @@ consumers = [{ type = "dot_env_file", path = "app.env", variable = "TOKEN" }]
 "#,
     )
     .unwrap();
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["rotate", "gitlab", "4821"]));
+    let (out, _, stderr) = run(rekey(&gl, &dir).args(["rotate", "gitlab", "4821"]));
     assert!(out.status.success(), "{stderr}");
     assert_eq!(
         std::fs::read_to_string(dir.join("app.env")).unwrap(),
@@ -198,7 +198,7 @@ consumers = [{ type = "dot_env_file", path = "app.env", variable = "TOKEN" }]
 fn list_shows_full_ids_and_flags_the_signed_in_key() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
-    let (out, stdout, stderr) = run(keyrotator(&gl, &dir).args(["list", "gitlab"]));
+    let (out, stdout, stderr) = run(rekey(&gl, &dir).args(["list", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 2);
@@ -216,12 +216,12 @@ fn rotate_all_needs_confirmation_and_skips_the_signed_in_key() {
 
     // No terminal and no --yes: refuse without rotating anything.
     let (out, _, stderr) =
-        run(keyrotator(&gl, &dir).args(["rotate-all", "gitlab", "--secret-dir", &secrets_arg]));
+        run(rekey(&gl, &dir).args(["rotate-all", "gitlab", "--secret-dir", &secrets_arg]));
     assert!(!out.status.success());
     assert!(stderr.contains("--yes"), "{stderr}");
     assert_eq!(gl.rotate_calls(), 0);
 
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).args([
+    let (out, _, stderr) = run(rekey(&gl, &dir).args([
         "rotate-all",
         "gitlab",
         "--secret-dir",
@@ -248,14 +248,14 @@ fn rotate_all_needs_confirmation_and_skips_the_signed_in_key() {
 fn retire_is_refused_for_atomic_providers() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["retire", "gitlab", "4821", "--yes"]));
+    let (out, _, stderr) = run(rekey(&gl, &dir).args(["retire", "gitlab", "4821", "--yes"]));
     assert!(!out.status.success());
     assert!(stderr.contains("nothing to retire"), "{stderr}");
 }
 
-/// Drive `keyrotator mcp` with a batch of JSON-RPC messages.
+/// Drive `rekey mcp` with a batch of JSON-RPC messages.
 fn mcp(gl: &FakeGitlab, dir: &Path, flags: &[&str], messages: &[Value]) -> Vec<Value> {
-    let mut child = keyrotator(gl, dir)
+    let mut child = rekey(gl, dir)
         .arg("mcp")
         .args(flags)
         .stdin(Stdio::piped())
@@ -308,7 +308,7 @@ fn mcp_is_read_only_by_default() {
     // The notification gets no response.
     assert_eq!(resp.len(), 5);
     assert_eq!(resp[0]["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(resp[0]["result"]["serverInfo"]["name"], "keyrotator");
+    assert_eq!(resp[0]["result"]["serverInfo"]["name"], "rekey");
 
     let names: Vec<&str> = resp[1]["result"]["tools"]
         .as_array()
@@ -348,7 +348,7 @@ fn mcp_rotates_only_to_configured_consumers_and_never_returns_the_secret() {
     assert_eq!(gl.rotate_calls(), 0);
 
     std::fs::write(
-        dir.join("keyrotator.toml"),
+        dir.join("rekey.toml"),
         r#"
 [[keys]]
 provider = "gitlab"
@@ -397,7 +397,7 @@ fn ci_consumers_never_put_the_secret_in_argv() {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).env("PATH", path).args([
+    let (out, _, stderr) = run(rekey(&gl, &dir).env("PATH", path).args([
         "rotate",
         "gitlab",
         "4821",
@@ -449,7 +449,7 @@ esac
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
 
     std::fs::write(
-        dir.join("keyrotator.toml"),
+        dir.join("rekey.toml"),
         r#"
 [[keys]]
 provider = "aws"
@@ -458,7 +458,7 @@ consumers = [{ type = "dot_env_file", path = ".env", variable = "AWS_SECRET_ACCE
 "#,
     )
     .unwrap();
-    let (out, stdout, stderr) = run(keyrotator(&gl, &dir)
+    let (out, stdout, stderr) = run(rekey(&gl, &dir)
         .env("PATH", path)
         .env("AWS_PROFILE", "prod")
         .args(["rotate", "aws", "AKIAOLD000000000", "--print-secret"]));
@@ -493,39 +493,37 @@ fn login_saves_credentials_and_later_runs_need_no_export() {
     let dir = tmpdir();
 
     // A rejected token is never saved.
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env("GITLAB_TOKEN", "glpat-wrong")
         .args(["login", "gitlab"]));
     assert!(!out.status.success());
     assert!(stderr.contains("nothing was saved"), "{stderr}");
     assert_eq!(saved(&dir), json!({}));
 
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["login", "gitlab"]));
+    let (out, _, stderr) = run(rekey(&gl, &dir).args(["login", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
     assert!(stderr.contains("Logged in to GitLab as @me"), "{stderr}");
-    assert_eq!(saved(&dir)["keyrotator-login/GITLAB_TOKEN"], ADMIN_TOKEN);
+    assert_eq!(saved(&dir)["rekey-login/GITLAB_TOKEN"], ADMIN_TOKEN);
 
     // No GITLAB_TOKEN in the environment: the saved login is used.
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env_remove("GITLAB_TOKEN")
         .args(["connect", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
 
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
-        .env_remove("GITLAB_TOKEN")
-        .args(["login"]));
+    let (out, _, stderr) = run(rekey(&gl, &dir).env_remove("GITLAB_TOKEN").args(["login"]));
     assert!(out.status.success(), "{stderr}");
     assert!(stderr.contains("gitlab       saved login"), "{stderr}");
 
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["logout", "gitlab"]));
+    let (out, _, stderr) = run(rekey(&gl, &dir).args(["logout", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
     assert_eq!(saved(&dir), json!({}));
 
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env_remove("GITLAB_TOKEN")
         .args(["connect", "gitlab"]));
     assert!(!out.status.success());
-    assert!(stderr.contains("keyrotator login gitlab"), "{stderr}");
+    assert!(stderr.contains("rekey login gitlab"), "{stderr}");
 }
 
 #[test]
@@ -534,10 +532,10 @@ fn rejected_saved_login_says_how_to_fix_it() {
     let dir = tmpdir();
     std::fs::write(
         dir.join("credstore.json"),
-        json!({"keyrotator-login/GITLAB_TOKEN": "glpat-revoked"}).to_string(),
+        json!({"rekey-login/GITLAB_TOKEN": "glpat-revoked"}).to_string(),
     )
     .unwrap();
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env_remove("GITLAB_TOKEN")
         .args(["connect", "gitlab"]));
     assert!(!out.status.success());
@@ -546,7 +544,7 @@ fn rejected_saved_login_says_how_to_fix_it() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("Replace it with: keyrotator login gitlab"),
+        stderr.contains("Replace it with: rekey login gitlab"),
         "{stderr}"
     );
 }
@@ -555,24 +553,24 @@ fn rejected_saved_login_says_how_to_fix_it() {
 fn rotating_the_login_token_updates_the_saved_login() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).args(["login", "gitlab"]));
+    let (out, _, stderr) = run(rekey(&gl, &dir).args(["login", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
 
-    // Token 1 is the one keyrotator signs in with. The saved login counts as a
+    // Token 1 is the one rekey signs in with. The saved login counts as a
     // destination, so no other flag is needed.
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env_remove("GITLAB_TOKEN")
         .args(["rotate", "gitlab", "1"]));
     assert!(out.status.success(), "{stderr}");
     assert!(stderr.contains("saved login will be updated"), "{stderr}");
     assert!(
-        stderr.contains("Updated: your saved keyrotator login"),
+        stderr.contains("Updated: your saved rekey login"),
         "{stderr}"
     );
-    assert_eq!(saved(&dir)["keyrotator-login/GITLAB_TOKEN"], NEW_TOKEN);
+    assert_eq!(saved(&dir)["rekey-login/GITLAB_TOKEN"], NEW_TOKEN);
 
-    // And keyrotator keeps working with the new token.
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    // And rekey keeps working with the new token.
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env_remove("GITLAB_TOKEN")
         .args(["connect", "gitlab"]));
     assert!(out.status.success(), "{stderr}");
@@ -582,7 +580,7 @@ fn rotating_the_login_token_updates_the_saved_login() {
 fn login_ignores_a_token_from_another_provider() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env("GITLAB_TOKEN", "ghp_notagitlabtoken")
         .args(["login", "gitlab"]));
     assert!(!out.status.success());
@@ -601,7 +599,7 @@ fn login_url_is_saved_only_when_not_the_default() {
     let gl = FakeGitlab::start();
     let dir = tmpdir();
     // The fake server stands in for a self-hosted GitLab.
-    let (out, _, stderr) = run(keyrotator(&gl, &dir).env_remove("GITLAB_URL").args([
+    let (out, _, stderr) = run(rekey(&gl, &dir).env_remove("GITLAB_URL").args([
         "login",
         "gitlab",
         "--url",
@@ -612,10 +610,10 @@ fn login_url_is_saved_only_when_not_the_default() {
         stderr.contains(&format!("Logging in to GitLab at {}.", gl.url)),
         "{stderr}"
     );
-    assert_eq!(saved(&dir)["keyrotator-login/GITLAB_URL"], gl.url.as_str());
+    assert_eq!(saved(&dir)["rekey-login/GITLAB_URL"], gl.url.as_str());
 
     // With the saved URL, nothing else needs to be set.
-    let (out, _, stderr) = run(keyrotator(&gl, &dir)
+    let (out, _, stderr) = run(rekey(&gl, &dir)
         .env_remove("GITLAB_URL")
         .env_remove("GITLAB_TOKEN")
         .args(["connect", "gitlab"]));

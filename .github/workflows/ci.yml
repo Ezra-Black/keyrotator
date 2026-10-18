@@ -35,4 +35,4 @@ jobs:
         run: cargo test --all --verbose
 
       - name: Check build without keychain support
-        run: cargo clippy -p keyrotator-core --no-default-features --all-targets
+        run: cargo clippy -p rekey-core --no-default-features --all-targets

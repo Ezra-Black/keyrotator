@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use dialoguer::{Confirm, Input, Select};
-use keyrotator_core::{Consumer, Secret};
+use rekey_core::{Consumer, Secret};
 use serde::Serialize;
 
 use crate::guide;
@@ -32,7 +32,7 @@ pub fn pick_key(
         .map(|k| {
             let mut line = format!("{}  (id {})", k.label, k.external_id);
             if current == Some(k.external_id.as_str()) {
-                line.push_str("  ← the key keyrotator is signed in with");
+                line.push_str("  ← the key rekey is signed in with");
             }
             line
         })
@@ -52,7 +52,7 @@ pub fn pick_key(
         .interact()?;
     let key = keys.into_iter().nth(i).expect("index from list");
     eprintln!(
-        "  (Next time you can skip this: keyrotator {verb} {} {})\n",
+        "  (Next time you can skip this: rekey {verb} {} {})\n",
         provider.cli_name(),
         key.external_id
     );
@@ -63,13 +63,13 @@ pub fn pick_key(
 /// they're worth saving to the config file.
 pub fn choose_destination(provider: Provider, secret: &Secret) -> Result<(Vec<Consumer>, bool)> {
     let n = guide::noun(provider);
-    eprintln!("The new {n} needs somewhere to go — keyrotator won't create one it can't hand you.");
+    eprintln!("The new {n} needs somewhere to go — rekey won't create one it can't hand you.");
     let mut options = vec![
         "Update a .env file (recommended for local apps)",
         "Save it to a file only you can read",
         "Set a GitHub Actions secret (uses the gh CLI)",
     ];
-    if keyrotator_core::credstore::available() {
+    if rekey_core::credstore::available() {
         options.push("Store it in your OS keychain");
     }
     options.push("Just show it to me once (not saved anywhere)");
@@ -142,10 +142,10 @@ pub fn offer_to_remember(
 ) -> Result<()> {
     let path = config_path
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(keyrotator_core::config::FILE_NAME));
+        .unwrap_or_else(|| PathBuf::from(rekey_core::config::FILE_NAME));
     eprintln!(
-        "\nkeyrotator can save this choice in {} (no secrets, just where they go), so \
-         next time it's simply: keyrotator rotate {} {}",
+        "\nrekey can save this choice in {} (no secrets, just where they go), so \
+         next time it's simply: rekey rotate {} {}",
         crate::guide::pretty_path(&path.to_string_lossy()),
         provider.cli_name(),
         secret.external_id
@@ -238,7 +238,7 @@ fn slug(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use keyrotator_core::{Config, ProviderKind};
+    use rekey_core::{Config, ProviderKind};
 
     #[test]
     fn remembered_entry_round_trips_and_survives_new_ids() {

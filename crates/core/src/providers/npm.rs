@@ -135,7 +135,7 @@ fn tempfile_npmrc(registry: &str, token: &str) -> Result<(std::fs::File, String)
         .trim_start_matches("https://")
         .trim_start_matches("http://");
     let path = std::env::temp_dir().join(format!(
-        "keyrotator-npmrc-{}-{}",
+        "rekey-npmrc-{}-{}",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));

@@ -1,10 +1,10 @@
-# keyrotator.toml — where each key's new secret should go when it rotates.
+# rekey.toml — where each key's new secret should go when it rotates.
 #
-# Put this in your project as keyrotator.toml, or in
-# ~/.config/keyrotator/config.toml, or pass --config <path>.
+# Put this in your project as rekey.toml, or in
+# ~/.config/rekey/config.toml, or pass --config <path>.
 #
 # Each [[keys]] entry matches keys by `provider` plus any of `id`, `name`
-# (the label shown by `keyrotator list`) and `principal`. Prefer `name` or
+# (the label shown by `rekey list`) and `principal`. Prefer `name` or
 # `principal` for providers that issue a new id on every rotation, or the
 # entry stops matching after the first one. Relative paths are relative to
 # this file.
@@ -37,6 +37,6 @@ consumers = [
 provider = "openai"
 name = "billing-sync"
 consumers = [
-  # Needs a build with --features keyrotator-core/os-keyring.
-  { type = "keychain", service = "keyrotator", account = "openai:billing-sync" },
+  # Needs a build with --features rekey-core/os-keyring.
+  { type = "keychain", service = "rekey", account = "openai:billing-sync" },
 ]

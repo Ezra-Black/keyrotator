@@ -1,4 +1,4 @@
-# keyrotator
+# rekey
 
 Rotate API keys and tokens across providers from one CLI: mint the new key,
 push it to everything that uses it, verify it, retire the old one. Includes an
@@ -9,12 +9,12 @@ credential.
 
 **CLI** — rotate a GitLab token straight into a `.env` file:
 
-![keyrotator rotating a GitLab token from the CLI](docs/images/cli-rotate.png)
+![rekey rotating a GitLab token from the CLI](docs/images/cli-rotate.png)
 
-**MCP** — Claude rotating the same token through `keyrotator mcp`; the secret
+**MCP** — Claude rotating the same token through `rekey mcp`; the secret
 never reaches the model:
 
-![Claude rotating a GitLab token via the keyrotator MCP server](docs/images/mcp-rotate.png)
+![Claude rotating a GitLab token via the rekey MCP server](docs/images/mcp-rotate.png)
 
 ## Install
 
@@ -22,12 +22,12 @@ Requires stable [Rust](https://rustup.rs).
 
 ```bash
 git clone https://github.com/Ezra-Black/keyrotator.git
-cd keyrotator
+cd rekey
 cargo install --path crates/cli
 ```
 
 OS keychain support (macOS Keychain, Windows Credential Manager, Linux Secret
-Service) is built in. `--no-default-features` on `keyrotator-core` removes it.
+Service) is built in. `--no-default-features` on `rekey-core` removes it.
 
 ## Quick start
 
@@ -41,35 +41,35 @@ token named `kr-test` (any scope).
 pre-filled. Click *Create token*, paste it back (input is hidden).
 
 ```bash
-keyrotator login gitlab
+rekey login gitlab
 ```
 ```
 Checking with GitLab…
 ✓ Logged in to GitLab as @you. Saved to your macOS Keychain.
-  keyrotator now works from any terminal — nothing to export.
+  rekey now works from any terminal — nothing to export.
 ```
 
 **3. Find the key id.**
 
 ```bash
-keyrotator list gitlab
+rekey list gitlab
 ```
 ```
 ID        NAME
-28550267  keyrotator   (signed in with this key)
+28550267  rekey   (signed in with this key)
 28550311  kr-test
 ```
 
-**4. Rotate it into a .env file.** keyrotator shows the plan and waits for you.
+**4. Rotate it into a .env file.** rekey shows the plan and waits for you.
 
 ```bash
-keyrotator rotate gitlab 28550311 --dotenv /tmp/kr-test.env:KR_TEST_TOKEN
+rekey rotate gitlab 28550311 --dotenv /tmp/kr-test.env:KR_TEST_TOKEN
 ```
 ```
 Here's what will happen:
   1. GitLab replaces "kr-test" with a new token and immediately revokes the old one. This can't be undone.
   2. The new token is saved to KR_TEST_TOKEN in /tmp/kr-test.env.
-  3. keyrotator checks that the new token works.
+  3. rekey checks that the new token works.
 
 Go ahead? [Y/n] y
 
@@ -93,12 +93,12 @@ rm /tmp/kr-test.env
 
 Then delete `kr-test` in GitLab.
 
-**For real keys:** run `keyrotator rotate gitlab` with no arguments — it lets
-you pick the key and destination and can save that to `keyrotator.toml`, so
+**For real keys:** run `rekey rotate gitlab` with no arguments — it lets
+you pick the key and destination and can save that to `rekey.toml`, so
 the next rotation is one command. In scripts/CI:
 
 ```bash
-keyrotator rotate gitlab 28550311 --dotenv .env --yes --no-input
+rekey rotate gitlab 28550311 --dotenv .env --yes --no-input
 ```
 
 ## Commands
@@ -130,7 +130,7 @@ everything else is stderr.
 | `--ssm <name>:<region>` | AWS SSM `SecureString` via `aws` (stdin). |
 | `--secret-file <path>` | File, mode 0600. |
 | `--secret-dir <dir>` | `rotate-all`: one 0600 file per key. |
-| `--keychain` | OS keychain, service `keyrotator`. |
+| `--keychain` | OS keychain, service `rekey`. |
 | `--print-secret` | stdout. |
 
 Repeatable flags: `--dotenv`, `--gh-secret`, `--ssm`.
@@ -138,7 +138,7 @@ Repeatable flags: `--dotenv`, `--gh-secret`, `--ssm`.
 
 ## Config
 
-`./keyrotator.toml`, then `~/.config/keyrotator/config.toml`. Contains no
+`./rekey.toml`, then `~/.config/rekey/config.toml`. Contains no
 secrets. Interactive `rotate` can write entries for you.
 
 ```toml
@@ -162,14 +162,14 @@ consumers = [
 Consumer types: `dot_env_file`, `github_actions_secret`, `aws_ssm_parameter`,
 `file`, `keychain`. Match on `name`/`principal` for providers that issue a new
 id per rotation. Relative paths resolve against the config file. Full example:
-[`keyrotator.toml.example`](keyrotator.toml.example).
+[`rekey.toml.example`](rekey.toml.example).
 
 ## Credentials
 
-Lookup order: environment variable → saved login (`keyrotator login`) → prompt
-(TTY only, offers to save). Never taken as flags. Rotating the token keyrotator
+Lookup order: environment variable → saved login (`rekey login`) → prompt
+(TTY only, offers to save). Never taken as flags. Rotating the token rekey
 signs in with (GitLab, Cloudflare) updates the saved login.
-`KEYROTATOR_DISABLE_KEYCHAIN=1` disables keychain reads/writes.
+`REKEY_DISABLE_KEYCHAIN=1` disables keychain reads/writes.
 
 ## Providers
 
@@ -196,7 +196,7 @@ AWS needs the `aws` CLI, npm needs `npm`, `--gh-secret` needs `gh`.
 | Style | Sequence | Failure handling |
 |---|---|---|
 | overlap | create → verify → deliver → deactivate old → (delete old) | Verify fails or all deliveries fail: new key deleted, nothing changed. Some deliveries fail: both keys stay live, exit 1. |
-| atomic | rotate (old revoked by provider) → deliver → verify | Irreversible. All deliveries fail: secret written to `keyrotator-rescue-*.secret` (0600). |
+| atomic | rotate (old revoked by provider) → deliver → verify | Irreversible. All deliveries fail: secret written to `rekey-rescue-*.secret` (0600). |
 | ephemeral | mint → verify → deliver | Old token expires on its own. |
 | manual | — | Prints manual steps. |
 
@@ -207,8 +207,8 @@ something needs attention.
 ## MCP
 
 ```bash
-keyrotator login gitlab
-claude mcp add keyrotator -- keyrotator mcp --config ~/.config/keyrotator/config.toml
+rekey login gitlab
+claude mcp add rekey -- rekey mcp --config ~/.config/rekey/config.toml
 ```
 
 | Tool | Enabled by | |
@@ -224,7 +224,7 @@ installing a new build.
 ## Security
 
 - Secrets go to subprocesses via stdin, never argv.
-- Files keyrotator creates are 0600; existing `.env` permissions are kept;
+- Files rekey creates are 0600; existing `.env` permissions are kept;
   writes are atomic.
 - Secret values are printed only with `--print-secret`.
 - Report vulnerabilities privately via the repo's **Security** tab.
