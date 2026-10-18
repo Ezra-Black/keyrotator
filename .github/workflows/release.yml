@@ -63,7 +63,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: rekey-*
+          path: |
+            rekey-*.tar.gz
+            rekey-*.tar.gz.sha256
+            rekey-*.zip
+            rekey-*.zip.sha256
 
   release:
     needs: build
