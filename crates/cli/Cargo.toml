@@ -3,13 +3,21 @@ name = "rekey"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Rotate API keys and tokens across AWS, GitLab, Cloudflare, OpenAI and more — CLI and MCP server"
+readme = "../../README.md"
+keywords = ["api-keys", "secrets", "rotation", "mcp", "cli"]
+categories = ["command-line-utilities", "authentication", "development-tools"]
 
 [[bin]]
 name = "rekey"
 path = "src/main.rs"
 
 [dependencies]
-rekey-core = { path = "../core" }
+rekey-core = { path = "../core", version = "0.1.0" }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }

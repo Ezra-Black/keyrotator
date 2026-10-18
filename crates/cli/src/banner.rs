@@ -4,7 +4,7 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-pub const REPO_URL: &str = "https://github.com/Ezra-Black/keyrotator";
+pub const REPO_URL: &str = "https://github.com/Ezra-Black/rekey";
 pub const AUTHOR_URL: &str = "https://www.ezrablack.dev";
 
 fn lines() -> [String; 4] {

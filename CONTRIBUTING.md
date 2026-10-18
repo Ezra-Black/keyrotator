@@ -21,7 +21,7 @@ self-contained and easy to review.
 ## Setting up
 
 ```bash
-git clone https://github.com/Ezra-Black/keyrotator.git
+git clone https://github.com/Ezra-Black/rekey.git
 cd rekey
 cargo build
 cargo test
@@ -84,6 +84,6 @@ failures through `err_body`.
 
 ## Issues
 
-Use the [issue forms](https://github.com/Ezra-Black/keyrotator/issues/new/choose):
+Use the [issue forms](https://github.com/Ezra-Black/rekey/issues/new/choose):
 provider requests, feature requests, and bug reports. Redact secrets.
 Security vulnerabilities go through the Security tab, not issues.
