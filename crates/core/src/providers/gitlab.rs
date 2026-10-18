@@ -147,8 +147,23 @@ impl Connector for GitlabConnector {
         }
     }
 
-    // deactivate_old / delete_old intentionally use the default no-op impls:
-    // GitLab already revoked the old token during `create`.
+    async fn current_key_id(&self) -> Option<String> {
+        let resp = self
+            .client
+            .get(self.url("/personal_access_tokens/self"))
+            .header("PRIVATE-TOKEN", self.token.as_str())
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let t: GlToken = resp.json().await.ok()?;
+        Some(t.id.to_string())
+    }
+
+    // No deactivate_old / delete_old: GitLab already revoked the old token
+    // during `create`.
 }
 
 /// Compute an RFC3339 date (YYYY-MM-DD) `days` from now, without pulling in a

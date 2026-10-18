@@ -134,10 +134,8 @@ impl Connector for DatadogConnector {
         }
     }
 
-    async fn deactivate_old(&self, _external_id: &str) -> Result<(), RotationError> {
-        // Datadog has no "disable" state for API keys — deletion is the revoke.
-        Ok(())
-    }
+    // No deactivate_old: Datadog API keys have no disabled state, so the old
+    // key stays live until delete_old.
 
     async fn delete_old(&self, external_id: &str) -> Result<(), RotationError> {
         let resp = self

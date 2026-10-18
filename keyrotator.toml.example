@@ -1,0 +1,42 @@
+# keyrotator.toml — where each key's new secret should go when it rotates.
+#
+# Put this in your project as keyrotator.toml, or in
+# ~/.config/keyrotator/config.toml, or pass --config <path>.
+#
+# Each [[keys]] entry matches keys by `provider` plus any of `id`, `name`
+# (the label shown by `keyrotator list`) and `principal`. Prefer `name` or
+# `principal` for providers that issue a new id on every rotation, or the
+# entry stops matching after the first one. Relative paths are relative to
+# this file.
+
+[[keys]]
+provider = "aws"
+principal = "ci-user"                     # the IAM user name
+consumers = [
+  # Writes the secret, and the new access key id, into .env.
+  { type = "dot_env_file", path = ".env", variable = "AWS_SECRET_ACCESS_KEY", id_variable = "AWS_ACCESS_KEY_ID" },
+  { type = "aws_ssm_parameter", name = "/ci/aws-secret-access-key", region = "us-east-1" },
+]
+
+[[keys]]
+provider = "gitlab"
+name = "ci-deploy"
+consumers = [
+  { type = "dot_env_file", path = ".env", variable = "GITLAB_TOKEN" },
+  { type = "github_actions_secret", repo = "me/my-app", secret_name = "GITLAB_TOKEN" },
+]
+
+[[keys]]
+provider = "cloudflare"
+id = "0123456789abcdef0123456789abcdef"   # Cloudflare keeps the id on roll
+consumers = [
+  { type = "file", path = "secrets/cloudflare-token" },        # created 0600
+]
+
+[[keys]]
+provider = "openai"
+name = "billing-sync"
+consumers = [
+  # Needs a build with --features keyrotator-core/os-keyring.
+  { type = "keychain", service = "keyrotator", account = "openai:billing-sync" },
+]

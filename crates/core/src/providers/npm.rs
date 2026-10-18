@@ -98,10 +98,12 @@ impl Connector for NpmConnector {
         let token = Self::extract_token(&out).ok_or_else(|| {
             RotationError::Http("could not parse a new token from `npm token create` output".into())
         })?;
-        // We don't reliably get the new token's short id from create output;
-        // use a prefix for display. The full value is what matters downstream.
-        let display_id: String = token.chars().take(8).collect();
-        Ok(NewCredential::new(display_id, token))
+        // `npm token create` doesn't reliably print the new token's id, and
+        // deriving one from the token value would leak part of the secret.
+        Ok(NewCredential::new(
+            "(new npm token — see `npm token list`)",
+            token,
+        ))
     }
 
     async fn verify(&self, cred: &NewCredential) -> Result<(), RotationError> {
@@ -118,10 +120,7 @@ impl Connector for NpmConnector {
         res
     }
 
-    async fn deactivate_old(&self, _external_id: &str) -> Result<(), RotationError> {
-        // npm has no disable state; revocation is the delete step.
-        Ok(())
-    }
+    // No deactivate_old: npm tokens have no disabled state; revoke is delete.
 
     async fn delete_old(&self, external_id: &str) -> Result<(), RotationError> {
         self.npm(&["token", "revoke", external_id], &[])
@@ -135,8 +134,19 @@ fn tempfile_npmrc(registry: &str, token: &str) -> Result<(std::fs::File, String)
     let host = registry
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let path = std::env::temp_dir().join(format!("keyrotator-npmrc-{}", std::process::id()));
-    let mut f = std::fs::File::create(&path)?;
+    let path = std::env::temp_dir().join(format!(
+        "keyrotator-npmrc-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&path)?;
     writeln!(f, "//{host}:_authToken={token}")?;
     Ok((f, path.to_string_lossy().into_owned()))
 }
