@@ -1,11 +1,11 @@
-//! `keyrotator login` / `logout`: keep provider credentials in the OS
-//! keychain so keyrotator works from any terminal, with nothing exported and
+//! `rekey login` / `logout`: keep provider credentials in the OS
+//! keychain so rekey works from any terminal, with nothing exported and
 //! nothing in a dotfile.
 
 use anyhow::Result;
 use clap::ValueEnum;
 use dialoguer::{Confirm, Select};
-use keyrotator_core::credstore::{self, LOGIN_SERVICE};
+use rekey_core::credstore::{self, LOGIN_SERVICE};
 
 use crate::providers::{
     ask_for_cred, connector_from, login_setting, login_vars, masked, required_creds, save_login,
@@ -56,7 +56,7 @@ fn ensure_store() -> Result<()> {
         return Ok(());
     }
     anyhow::bail!(
-        "saving logins isn't available here — KEYROTATOR_DISABLE_KEYCHAIN is set, or this \
+        "saving logins isn't available here — REKEY_DISABLE_KEYCHAIN is set, or this \
          build has no keychain support. Use environment variables instead."
     )
 }
@@ -97,7 +97,7 @@ pub async fn login(provider: Option<Provider>, url: Option<String>, ask: bool) -
             _ => "`npm login`",
         };
         eprintln!(
-            "{name} uses its own CLI's login, so there's nothing for keyrotator to save. \
+            "{name} uses its own CLI's login, so there's nothing for rekey to save. \
              Sign in with {how}."
         );
         return Ok(());
@@ -153,7 +153,7 @@ pub async fn login(provider: Option<Provider>, url: Option<String>, ask: bool) -
             }
             if !ask {
                 anyhow::bail!(
-                    "{} isn't set (or doesn't look like {}). Run `keyrotator login {}` in a \
+                    "{} isn't set (or doesn't look like {}). Run `rekey login {}` in a \
                      terminal to be asked for it.",
                     c.var,
                     c.what,
@@ -197,7 +197,7 @@ pub async fn login(provider: Option<Provider>, url: Option<String>, ask: bool) -
                     }
                 }
                 eprintln!(
-                    "✓ Logged in to {name}{who}. Saved to {}.\n  keyrotator now works from any \
+                    "✓ Logged in to {name}{who}. Saved to {}.\n  rekey now works from any \
                      terminal — nothing to export.",
                     credstore::place()
                 );
@@ -209,7 +209,7 @@ pub async fn login(provider: Option<Provider>, url: Option<String>, ask: bool) -
                         );
                     }
                 }
-                eprintln!("\nNext: keyrotator list {}", p.cli_name());
+                eprintln!("\nNext: rekey list {}", p.cli_name());
                 return Ok(());
             }
             Err(e) => {
@@ -259,7 +259,7 @@ pub fn logout(provider: Option<Provider>, ask: bool) -> Result<()> {
                 .interact()?;
             saved[i]
         }
-        None => anyhow::bail!("which provider? e.g. keyrotator logout gitlab"),
+        None => anyhow::bail!("which provider? e.g. rekey logout gitlab"),
     };
     for var in login_vars(p) {
         credstore::delete(LOGIN_SERVICE, var)

@@ -269,7 +269,7 @@ pub enum RotationError {
     ManualActionRequired(String),
     #[error(
         "nowhere to put the new secret for {0} — refusing to rotate. \
-         Add a consumer (e.g. --dotenv, --secret-file, --print-secret, or a keyrotator.toml entry)."
+         Add a consumer (e.g. --dotenv, --secret-file, --print-secret, or a rekey.toml entry)."
     )]
     NoDestination(String),
     #[error(transparent)]

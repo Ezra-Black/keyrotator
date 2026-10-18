@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use keyrotator_core::{Consumer, OldKeyState, RotationOutcome, RotationStyle, Secret};
+use rekey_core::{Consumer, OldKeyState, RotationOutcome, RotationStyle, Secret};
 
 use crate::providers::Provider;
 
@@ -68,7 +68,7 @@ pub fn plan(
     secret: &Secret,
     delete_old_now: bool,
 ) -> Vec<String> {
-    let name = keyrotator_core::ProviderKind::from(p).display_name();
+    let name = rekey_core::ProviderKind::from(p).display_name();
     let n = noun(p);
     let targets: Vec<String> = secret.consumers.iter().map(describe_target).collect();
     let deliver = format!("The new {n} is saved to {}.", join_and(&targets));
@@ -79,7 +79,7 @@ pub fn plan(
                 "{name} creates a new {n} for \"{}\". The old one keeps working for now.",
                 secret.label
             ));
-            steps.push(format!("keyrotator checks that the new {n} works."));
+            steps.push(format!("rekey checks that the new {n} works."));
             steps.push(deliver);
             steps.push(if delete_old_now {
                 format!("The old {n} is permanently deleted.")
@@ -91,7 +91,7 @@ pub fn plan(
             } else {
                 format!(
                     "The old {n} keeps working until you retire it — {name} has no \
-                     \"switched off\" state. keyrotator will tell you how."
+                     \"switched off\" state. rekey will tell you how."
                 )
             });
             steps.push(
@@ -105,11 +105,11 @@ pub fn plan(
                 secret.label
             ));
             steps.push(deliver);
-            steps.push(format!("keyrotator checks that the new {n} works."));
+            steps.push(format!("rekey checks that the new {n} works."));
         }
         RotationStyle::Ephemeral => {
             steps.push(format!("{name} issues a fresh short-lived {n}."));
-            steps.push("keyrotator checks that it works.".into());
+            steps.push("rekey checks that it works.".into());
             steps.push(deliver);
             steps.push("The previous one expires on its own.".into());
         }
@@ -151,10 +151,8 @@ pub fn describe_target(c: &Consumer) -> String {
         }
         Consumer::AwsSsmParameter { name, region } => format!("SSM parameter {name} ({region})"),
         Consumer::File { path } => format!("{} (only you can read it)", pretty_path(path)),
-        Consumer::Keychain { service, .. }
-            if service == keyrotator_core::credstore::LOGIN_SERVICE =>
-        {
-            "your saved keyrotator login".into()
+        Consumer::Keychain { service, .. } if service == rekey_core::credstore::LOGIN_SERVICE => {
+            "your saved rekey login".into()
         }
         Consumer::Keychain { .. } => "your keychain".into(),
         Consumer::Reveal => "your screen (shown once, not stored)".into(),
@@ -210,12 +208,12 @@ pub fn next_steps(p: Provider, old: &Secret, outcome: &RotationOutcome) -> Vec<S
     match outcome.old_key {
         OldKeyState::StillActive if outcome.failed_consumers.is_empty() => steps.push(format!(
             "The old {n} still works. Once everything uses the new one, revoke it:\n      \
-             keyrotator retire {cli} {}",
+             rekey retire {cli} {}",
             old.external_id
         )),
         OldKeyState::Deactivated => steps.push(format!(
             "The old {n} is switched off. When you're sure nothing broke, delete it:\n      \
-             keyrotator retire {cli} {} --delete",
+             rekey retire {cli} {} --delete",
             old.external_id
         )),
         _ => {}
@@ -305,7 +303,7 @@ mod tests {
 
     #[test]
     fn atomic_plan_warns_it_cannot_be_undone() {
-        let mut s = Secret::new(keyrotator_core::ProviderKind::Gitlab, "1", "kr-test", "1");
+        let mut s = Secret::new(rekey_core::ProviderKind::Gitlab, "1", "kr-test", "1");
         s.consumers
             .push(parse_dotenv_flag(Provider::Gitlab, ".env"));
         let plan = plan(

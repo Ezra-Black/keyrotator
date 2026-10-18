@@ -3,13 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use keyrotator_core::credstore::{self, LOGIN_SERVICE};
-use keyrotator_core::providers::{
+use rekey_core::credstore::{self, LOGIN_SERVICE};
+use rekey_core::providers::{
     AnthropicConnector, AwsConnector, CloudflareConnector, DatadogConnector, DockerHubConnector,
     GithubAppConnector, GitlabConnector, NpmConnector, OpenAiConnector, SendGridConnector,
     TwilioConnector,
 };
-use keyrotator_core::{Connector, ProviderKind};
+use rekey_core::{Connector, ProviderKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Provider {
@@ -214,7 +214,7 @@ pub fn login_vars(p: Provider) -> Vec<&'static str> {
     vars
 }
 
-/// The variable holding the token keyrotator signs in with, for providers
+/// The variable holding the token rekey signs in with, for providers
 /// whose own login token can be rotated (so a saved login can follow it).
 pub fn login_token_var(p: Provider) -> Option<&'static str> {
     match p {
@@ -291,7 +291,7 @@ pub fn cred_page(var: &str, setting: Option<&str>) -> Option<String> {
     let dd = setting.unwrap_or("datadoghq.com");
     Some(match var {
         "GITLAB_TOKEN" => format!(
-            "{}/-/user_settings/personal_access_tokens?name=keyrotator&scopes=api",
+            "{}/-/user_settings/personal_access_tokens?name=rekey&scopes=api",
             setting
                 .unwrap_or("https://gitlab.com")
                 .trim_end_matches('/')
@@ -336,7 +336,7 @@ pub fn masked(value: &str) -> String {
 /// Ask for one credential. For secrets: offer to open the page where it's
 /// created, then read it with hidden input.
 pub fn ask_for_cred(c: &Cred, setting: Option<&str>) -> Result<String> {
-    eprintln!("keyrotator needs {} ({}).", c.what, c.var);
+    eprintln!("rekey needs {} ({}).", c.what, c.var);
     match cred_page(c.var, setting) {
         Some(url) => {
             eprintln!("  Create one here: {url}");
@@ -371,9 +371,9 @@ pub fn ask_for_cred(c: &Cred, setting: Option<&str>) -> Result<String> {
 
 fn missing(p: Provider, c: &Cred) -> anyhow::Error {
     anyhow::anyhow!(
-        "{var} isn't set — keyrotator needs {what}.\n  \
+        "{var} isn't set — rekey needs {what}.\n  \
          Get one: {where_}\n  \
-         Then save it once with: keyrotator login {p}\n  \
+         Then save it once with: rekey login {p}\n  \
          (or for this shell only: export {var}=...)",
         var = c.var,
         what = c.what,
@@ -510,7 +510,7 @@ pub fn save_login(entries: &[(&'static str, String)]) -> Result<()> {
 
 /// Build the connector for a provider.
 ///
-/// Credentials come from the environment, then a saved login (`keyrotator
+/// Credentials come from the environment, then a saved login (`rekey
 /// login`), then — with `ask` — a prompt, after which the user is offered to
 /// save what they typed. MCP passes `ask = false`: its stdin is the protocol.
 pub async fn build_connector(p: Provider, ask: bool) -> Result<Arc<dyn Connector>> {
@@ -530,8 +530,8 @@ pub async fn build_connector(p: Provider, ask: bool) -> Result<Arc<dyn Connector
                 Ok(()) => {
                     save_login(&typed)?;
                     eprintln!(
-                        "  ✓ Saved. keyrotator will use it from any terminal. \
-                         Remove it any time with: keyrotator logout {}\n",
+                        "  ✓ Saved. rekey will use it from any terminal. \
+                         Remove it any time with: rekey logout {}\n",
                         p.cli_name()
                     );
                 }
@@ -542,7 +542,7 @@ pub async fn build_connector(p: Provider, ask: bool) -> Result<Arc<dyn Connector
             }
         } else {
             eprintln!(
-                "  OK, using it for this run only. `keyrotator login {}` saves it later.\n",
+                "  OK, using it for this run only. `rekey login {}` saves it later.\n",
                 p.cli_name()
             );
         }

@@ -105,7 +105,7 @@ impl Connector for DockerHubConnector {
     async fn create(&self, secret: &Secret) -> Result<NewCredential, RotationError> {
         let jwt = self.jwt(&self.username, &self.password).await?;
         let label = if secret.label.is_empty() {
-            "keyrotator".to_string()
+            "rekey".to_string()
         } else {
             secret.label.clone()
         };

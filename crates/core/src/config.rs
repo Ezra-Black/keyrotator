@@ -1,4 +1,4 @@
-//! `keyrotator.toml`: where each key's consumers live.
+//! `rekey.toml`: where each key's consumers live.
 //!
 //! ```toml
 //! [[keys]]
@@ -19,7 +19,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::models::{Consumer, ProviderKind, Secret};
 
-pub const FILE_NAME: &str = "keyrotator.toml";
+pub const FILE_NAME: &str = "rekey.toml";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,8 +85,8 @@ impl Config {
         Self::parse(&text, base).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// `explicit` if given; otherwise `./keyrotator.toml`, then
-    /// `$XDG_CONFIG_HOME/keyrotator/config.toml` (or `~/.config/...`).
+    /// `explicit` if given; otherwise `./rekey.toml`, then
+    /// `$XDG_CONFIG_HOME/rekey/config.toml` (or `~/.config/...`).
     pub fn discover(explicit: Option<&Path>) -> Result<Option<(PathBuf, Self)>, String> {
         if let Some(p) = explicit {
             return Self::load(p).map(|c| Some((p.to_path_buf(), c)));
@@ -96,7 +96,7 @@ impl Config {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
         if let Some(dir) = xdg {
-            candidates.push(dir.join("keyrotator").join("config.toml"));
+            candidates.push(dir.join("rekey").join("config.toml"));
         }
         for p in candidates {
             if p.is_file() {

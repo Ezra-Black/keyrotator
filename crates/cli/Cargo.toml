@@ -1,15 +1,15 @@
 [package]
-name = "keyrotator"
+name = "rekey"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "keyrotator"
+name = "rekey"
 path = "src/main.rs"
 
 [dependencies]
-keyrotator-core = { path = "../core" }
+rekey-core = { path = "../core" }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }

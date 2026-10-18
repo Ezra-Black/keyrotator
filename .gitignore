@@ -4,6 +4,6 @@
 *.pem
 .env
 .env.*
-keyrotator.toml
+rekey.toml
 *.secret
-keyrotator-rescue-*
+rekey-rescue-*

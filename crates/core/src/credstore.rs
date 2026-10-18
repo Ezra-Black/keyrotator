@@ -1,14 +1,14 @@
 //! The OS credential store (macOS Keychain, Windows Credential Manager,
 //! Linux Secret Service), used for saved logins and the `keychain` consumer.
 //!
-//! - `KEYROTATOR_DISABLE_KEYCHAIN=1` turns it off entirely: nothing is read
+//! - `REKEY_DISABLE_KEYCHAIN=1` turns it off entirely: nothing is read
 //!   or written (useful in CI, where there is no keychain).
-//! - Debug builds only: `KEYROTATOR_TEST_CREDSTORE=<file>` swaps in a
+//! - Debug builds only: `REKEY_TEST_CREDSTORE=<file>` swaps in a
 //!   plaintext JSON file so tests never touch the real keychain. Release
 //!   builds don't contain this backend at all.
 
 /// Service name under which saved provider logins live.
-pub const LOGIN_SERVICE: &str = "keyrotator-login";
+pub const LOGIN_SERVICE: &str = "rekey-login";
 
 enum Backend {
     Disabled,
@@ -21,11 +21,11 @@ enum Backend {
 }
 
 fn backend() -> Backend {
-    if std::env::var_os("KEYROTATOR_DISABLE_KEYCHAIN").is_some_and(|v| !v.is_empty()) {
+    if std::env::var_os("REKEY_DISABLE_KEYCHAIN").is_some_and(|v| !v.is_empty()) {
         return Backend::Disabled;
     }
     #[cfg(debug_assertions)]
-    if let Some(path) = std::env::var_os("KEYROTATOR_TEST_CREDSTORE") {
+    if let Some(path) = std::env::var_os("REKEY_TEST_CREDSTORE") {
         return Backend::File(path.into());
     }
     #[cfg(feature = "os-keyring")]
@@ -73,7 +73,7 @@ pub fn get(service: &str, account: &str) -> Option<String> {
 
 pub fn set(service: &str, account: &str, value: &str) -> Result<(), String> {
     match backend() {
-        Backend::Disabled => Err("the keychain is disabled (KEYROTATOR_DISABLE_KEYCHAIN)".into()),
+        Backend::Disabled => Err("the keychain is disabled (REKEY_DISABLE_KEYCHAIN)".into()),
         #[cfg(debug_assertions)]
         Backend::File(path) => {
             let mut map = file::load(&path);

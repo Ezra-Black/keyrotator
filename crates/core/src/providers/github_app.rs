@@ -25,7 +25,7 @@ pub struct GithubAppConnector {
 impl GithubAppConnector {
     pub fn new(app_id: String, private_key_pem: String) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent("keyrotator")
+            .user_agent("rekey")
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
