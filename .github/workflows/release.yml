@@ -3,12 +3,18 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and release (e.g. v0.1.0)
+        required: true
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -18,12 +24,14 @@ jobs:
         include:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
-          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: x86_64-apple-darwin, os: macos-14 }
           - { target: aarch64-apple-darwin, os: macos-14 }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -36,7 +44,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          name="rekey-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="rekey-${TAG}-${{ matrix.target }}"
           mkdir "$name"
           cp "target/${{ matrix.target }}/release/rekey" README.md LICENSE "$name/"
           tar czf "$name.tar.gz" "$name"
@@ -46,7 +54,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "rekey-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          $name = "rekey-$env:TAG-${{ matrix.target }}"
           New-Item -ItemType Directory $name | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/rekey.exe", README.md, LICENSE $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
@@ -70,7 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "rekey $GITHUB_REF_NAME" \
+            --title "rekey $TAG" \
             --generate-notes
