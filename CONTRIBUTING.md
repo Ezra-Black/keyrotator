@@ -82,12 +82,8 @@ failures through `err_body`.
   `crates/core/tests/engine.rs`. CLI and MCP behavior is tested end to end
   against a fake API in `crates/cli/tests/cli.rs`.
 
-## Reporting issues
+## Issues
 
-Open an issue with:
-- the provider and command you ran,
-- what you expected vs. what happened,
-- the error text (redact any real token values).
-
-Security-sensitive reports: please open a private advisory via GitHub's
-"Report a vulnerability" rather than a public issue.
+Use the [issue forms](https://github.com/Ezra-Black/keyrotator/issues/new/choose):
+provider requests, feature requests, and bug reports. Redact secrets.
+Security vulnerabilities go through the Security tab, not issues.

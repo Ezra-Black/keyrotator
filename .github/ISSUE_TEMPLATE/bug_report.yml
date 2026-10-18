@@ -1,0 +1,33 @@
+name: Bug report
+description: Something doesn't work as documented.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "**Redact every token, key, and secret before posting.** Security issues: use the Security tab instead."
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      placeholder: keyrotator rotate gitlab 4821 --dotenv .env
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output (redacted)
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Version / OS
+      placeholder: keyrotator --version, macOS 15

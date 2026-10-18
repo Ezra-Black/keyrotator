@@ -1,0 +1,46 @@
+name: Provider request
+description: Ask for keyrotator to support another platform's keys or tokens.
+title: "Provider: "
+labels: ["provider-request"]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      placeholder: e.g. Stripe, Vercel, Google Cloud service accounts
+    validations:
+      required: true
+  - type: input
+    id: credential
+    attributes:
+      label: Credential to rotate
+      placeholder: e.g. restricted API keys, project tokens
+    validations:
+      required: true
+  - type: dropdown
+    id: api
+    attributes:
+      label: Can keys be created and revoked via API?
+      options:
+        - "Yes"
+        - "Revoke only"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: API docs
+      description: Links to the create / list / revoke endpoints, if you have them.
+  - type: textarea
+    id: consumers
+    attributes:
+      label: Where the key is used
+      description: Any destination keyrotator should update (e.g. Vercel env vars, Kubernetes secrets).
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: Contributing
+      options:
+        - label: I'm willing to open a PR for this
