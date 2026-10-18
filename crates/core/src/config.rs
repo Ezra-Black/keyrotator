@@ -144,7 +144,8 @@ consumers = [{ type = "aws_ssm_parameter", name = "/ci/aws", region = "us-east-1
         assert_eq!(
             c[0],
             Consumer::DotEnvFile {
-                path: "/proj/.env".into(),
+                // Platform separator: `/proj/.env` here, `/proj\.env` on Windows.
+                path: Path::new("/proj").join(".env").to_string_lossy().into(),
                 variable: "GITLAB_TOKEN".into(),
                 id_variable: None,
             }
