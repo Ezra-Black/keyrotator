@@ -26,16 +26,13 @@ impl AwsConnector {
         }
     }
 
-    async fn aws(
-        &self,
-        args: &[&str],
-        extra_env: &[(&str, &str)],
-    ) -> Result<String, RotationError> {
+    async fn aws(&self, args: &[&str]) -> Result<String, RotationError> {
         let mut cmd = Command::new("aws");
         cmd.args(args).args(self.base_args());
-        for (k, v) in extra_env {
-            cmd.env(k, v);
-        }
+        Self::run(cmd, args).await
+    }
+
+    async fn run(mut cmd: Command, args: &[&str]) -> Result<String, RotationError> {
         let out = cmd.output().await?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -49,17 +46,14 @@ impl AwsConnector {
 
     async fn raw_keys(&self, user_name: &str) -> Result<Vec<AccessKeyMetadata>, RotationError> {
         let stdout = self
-            .aws(
-                &[
-                    "iam",
-                    "list-access-keys",
-                    "--user-name",
-                    user_name,
-                    "--output",
-                    "json",
-                ],
-                &[],
-            )
+            .aws(&[
+                "iam",
+                "list-access-keys",
+                "--user-name",
+                user_name,
+                "--output",
+                "json",
+            ])
             .await?;
         let parsed: ListAccessKeys = serde_json::from_str(&stdout)
             .map_err(|e| RotationError::Http(format!("parse list-access-keys: {e}")))?;
@@ -78,7 +72,7 @@ impl Connector for AwsConnector {
     }
 
     async fn connect(&self) -> Result<(), RotationError> {
-        self.aws(&["sts", "get-caller-identity", "--output", "json"], &[])
+        self.aws(&["sts", "get-caller-identity", "--output", "json"])
             .await
             .map(|_| ())
             .map_err(|e| RotationError::NotAuthorized(e.to_string()))
@@ -86,7 +80,7 @@ impl Connector for AwsConnector {
 
     async fn list_keys(&self) -> Result<Vec<Secret>, RotationError> {
         let stdout = self
-            .aws(&["iam", "list-access-keys", "--output", "json"], &[])
+            .aws(&["iam", "list-access-keys", "--output", "json"])
             .await?;
         let parsed: ListAccessKeys = serde_json::from_str(&stdout)
             .map_err(|e| RotationError::Http(format!("parse list-access-keys: {e}")))?;
@@ -113,17 +107,14 @@ impl Connector for AwsConnector {
             )));
         }
         let stdout = self
-            .aws(
-                &[
-                    "iam",
-                    "create-access-key",
-                    "--user-name",
-                    &secret.principal,
-                    "--output",
-                    "json",
-                ],
-                &[],
-            )
+            .aws(&[
+                "iam",
+                "create-access-key",
+                "--user-name",
+                &secret.principal,
+                "--output",
+                "json",
+            ])
             .await?;
         let created: CreateAccessKey = serde_json::from_str(&stdout)
             .map_err(|e| RotationError::Http(format!("parse create-access-key: {e}")))?;
@@ -134,18 +125,25 @@ impl Connector for AwsConnector {
     }
 
     async fn verify(&self, cred: &NewCredential) -> Result<(), RotationError> {
-        // Call STS with ONLY the new key (via env), retrying for propagation.
-        let env = [
-            ("AWS_ACCESS_KEY_ID", cred.external_id.as_str()),
-            ("AWS_SECRET_ACCESS_KEY", cred.secret_value.as_str()),
-            ("AWS_PROFILE", ""),
-            ("AWS_SESSION_TOKEN", ""),
-        ];
+        // Call STS with ONLY the new key, retrying for propagation. No
+        // `--profile` here, and every other credential source is cleared: a
+        // profile would win over the env vars and we'd be verifying the old
+        // key instead of the new one.
+        let args = ["sts", "get-caller-identity", "--output", "json"];
         for attempt in 1..=6 {
-            match self
-                .aws(&["sts", "get-caller-identity", "--output", "json"], &env)
-                .await
-            {
+            let mut cmd = Command::new("aws");
+            cmd.args(args)
+                .env("AWS_ACCESS_KEY_ID", &cred.external_id)
+                .env("AWS_SECRET_ACCESS_KEY", &cred.secret_value);
+            for var in [
+                "AWS_PROFILE",
+                "AWS_DEFAULT_PROFILE",
+                "AWS_SESSION_TOKEN",
+                "AWS_SECURITY_TOKEN",
+            ] {
+                cmd.env_remove(var);
+            }
+            match Self::run(cmd, &args).await {
                 Ok(_) => return Ok(()),
                 Err(e) if attempt == 6 => {
                     return Err(RotationError::VerificationFailed(format!(
@@ -160,29 +158,44 @@ impl Connector for AwsConnector {
         unreachable!()
     }
 
+    fn supports_deactivate(&self) -> bool {
+        true
+    }
+
+    async fn current_key_id(&self) -> Option<String> {
+        if self.profile.is_none() {
+            if let Some(id) = std::env::var("AWS_ACCESS_KEY_ID")
+                .ok()
+                .filter(|s| !s.is_empty())
+            {
+                return Some(id);
+            }
+        }
+        // Static-key profiles; SSO / role sessions have no long-lived key id.
+        self.aws(&["configure", "get", "aws_access_key_id"])
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
     async fn deactivate_old(&self, external_id: &str) -> Result<(), RotationError> {
-        self.aws(
-            &[
-                "iam",
-                "update-access-key",
-                "--access-key-id",
-                external_id,
-                "--status",
-                "Inactive",
-            ],
-            &[],
-        )
+        self.aws(&[
+            "iam",
+            "update-access-key",
+            "--access-key-id",
+            external_id,
+            "--status",
+            "Inactive",
+        ])
         .await
         .map(|_| ())
     }
 
     async fn delete_old(&self, external_id: &str) -> Result<(), RotationError> {
-        self.aws(
-            &["iam", "delete-access-key", "--access-key-id", external_id],
-            &[],
-        )
-        .await
-        .map(|_| ())
+        self.aws(&["iam", "delete-access-key", "--access-key-id", external_id])
+            .await
+            .map(|_| ())
     }
 }
 

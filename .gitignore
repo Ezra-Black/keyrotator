@@ -1,7 +1,9 @@
 /target
 **/*.rs.bk
-Cargo.lock
 .DS_Store
 *.pem
 .env
 .env.*
+keyrotator.toml
+*.secret
+keyrotator-rescue-*

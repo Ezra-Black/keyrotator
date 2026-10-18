@@ -1,18 +1,47 @@
+mod banner;
+mod guide;
+mod interactive;
+mod mcp;
+mod ops;
+mod providers;
+
+use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use keyrotator_core::providers::{
-    AnthropicConnector, AwsConnector, CloudflareConnector, DatadogConnector, DockerHubConnector,
-    GithubAppConnector, GitlabConnector, NpmConnector, OpenAiConnector, SendGridConnector,
-    TwilioConnector,
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use keyrotator_core::{
+    Connector, Consumer, OldKeyState, RotationEngine, RotationError, RotationStage, RotationStyle,
+    Secret,
 };
-use keyrotator_core::{Connector, ProviderKind, RotationEngine, RotationStage};
 
-/// Auto-rotate API keys across the accounts you administer.
+use crate::providers::{build_connector, credential_vars, Provider};
+
+const GETTING_STARTED: &str = "\
+Getting started:
+  1. keyrotator connect gitlab     check your credentials (it explains what to set)
+  2. keyrotator rotate gitlab      pick a key, choose where the new one goes, done
+
+In a terminal, keyrotator asks for anything you leave out. Flags can go in any
+order. Use --no-input in scripts to get errors instead of questions.";
+
+/// Rotate the API keys and tokens for accounts you administer.
+///
+/// Status messages go to stderr; stdout carries only `list` output and, with
+/// --print-secret, the new secret — so it's safe to capture.
 #[derive(Parser)]
 #[command(name = "keyrotator", version, about)]
 struct Cli {
+    /// Config file with per-key consumers [default: ./keyrotator.toml, then
+    /// ~/.config/keyrotator/config.toml]
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Never ask questions; fail with an explanation instead (for scripts/CI).
+    #[arg(long, global = true)]
+    no_input: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -24,142 +53,129 @@ enum Command {
         #[arg(value_enum)]
         provider: Provider,
     },
-    /// List the keys discovered for a provider.
+    /// List the keys for a provider, with the ids `rotate` and `retire` take.
     List {
         #[arg(value_enum)]
         provider: Provider,
     },
-    /// Rotate a single key by its external id (AWS access key id / GitLab token id).
+    /// Rotate one key, delivering the new secret where it's used.
+    ///
+    /// The new secret must go somewhere: consumers from keyrotator.toml and/or
+    /// the destination flags below. In a terminal, anything you leave out —
+    /// which key, where it goes — is asked for, with the plan shown before
+    /// anything changes.
+    #[command(after_help = "\
+Examples:
+  keyrotator rotate gitlab                        asks which key and where it goes
+  keyrotator rotate gitlab 4821 --dotenv .env     writes GITLAB_TOKEN in .env
+  keyrotator rotate gitlab 4821 --dotenv .env:MY_TOKEN --gh-secret me/app:MY_TOKEN
+  keyrotator rotate aws AKIA... --dotenv .env     writes both AWS_ACCESS_KEY_ID and
+                                                  AWS_SECRET_ACCESS_KEY
+
+Flags can go in any order.")]
     Rotate {
         #[arg(value_enum)]
         provider: Provider,
-        /// The key/token id to rotate.
-        id: String,
-        /// Delete the old credential immediately instead of after a grace period (AWS only).
+        /// The key's id, exactly as shown by `list`. Omit it to pick from a list.
+        id: Option<String>,
+        #[command(flatten)]
+        dest: Destinations,
+        /// Write the new secret to this file (created owner-only, mode 0600).
+        #[arg(long, value_name = "PATH")]
+        secret_file: Option<PathBuf>,
+        /// Set a variable in a .env file; VAR defaults to the usual name for
+        /// the provider (e.g. GITLAB_TOKEN). Repeatable.
+        #[arg(long, value_name = "PATH[:VAR]")]
+        dotenv: Vec<String>,
+        /// Set a GitHub Actions secret via `gh`. Repeatable.
+        #[arg(long, value_name = "OWNER/REPO:NAME")]
+        gh_secret: Vec<String>,
+        /// Write an AWS SSM SecureString parameter. Repeatable.
+        #[arg(long, value_name = "NAME:REGION")]
+        ssm: Vec<String>,
+        /// Delete the old key right away instead of leaving it for `retire`.
         #[arg(long)]
         delete_old_now: bool,
+        /// Skip the "go ahead?" question.
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
-    /// Rotate every discovered key for a provider.
+    /// Rotate every key for a provider that has somewhere to deliver its new
+    /// secret (configured consumers, or the flags below).
+    ///
+    /// Skips the key you're authenticated with, when the provider can tell.
     RotateAll {
         #[arg(value_enum)]
         provider: Provider,
+        #[command(flatten)]
+        dest: Destinations,
+        /// Write each new secret to <DIR>/<provider>-<id>.secret (mode 0600).
+        #[arg(long, value_name = "DIR")]
+        secret_dir: Option<PathBuf>,
+        /// Delete each old key right away instead of leaving it for `retire`.
+        #[arg(long)]
+        delete_old_now: bool,
+        /// Don't ask for confirmation.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Revoke a key you no longer use: switch it off where the provider
+    /// supports that, otherwise delete it.
+    Retire {
+        #[arg(value_enum)]
+        provider: Provider,
+        /// The key's id, exactly as shown by `list`. Omit it to pick from a list.
+        id: Option<String>,
+        /// Also permanently delete a key the provider can switch off.
+        #[arg(long)]
+        delete: bool,
+        /// Don't ask for confirmation.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Run an MCP server on stdio so an AI assistant can list and rotate keys.
+    ///
+    /// Read-only unless --allow-rotate / --allow-retire are given. Rotation
+    /// over MCP only delivers secrets to consumers in your config file; secret
+    /// values are never returned to the assistant.
+    Mcp {
+        /// Expose the `rotate_key` tool.
+        #[arg(long)]
+        allow_rotate: bool,
+        /// Expose the `retire_key` tool.
+        #[arg(long)]
+        allow_retire: bool,
     },
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum Provider {
-    Aws,
-    Gitlab,
-    Cloudflare,
-    Datadog,
-    Npm,
-    Dockerhub,
-    Openai,
-    Anthropic,
-    Twilio,
-    Sendgrid,
-    GithubApp,
+/// Destinations available to both `rotate` and `rotate-all`.
+#[derive(Args)]
+struct Destinations {
+    /// Print the new secret to stdout.
+    #[arg(long)]
+    print_secret: bool,
+    /// Store the new secret in the OS keychain (service "keyrotator").
+    #[arg(long)]
+    keychain: bool,
 }
 
-impl From<Provider> for ProviderKind {
-    fn from(p: Provider) -> Self {
-        match p {
-            Provider::Aws => ProviderKind::Aws,
-            Provider::Gitlab => ProviderKind::Gitlab,
-            Provider::Cloudflare => ProviderKind::Cloudflare,
-            Provider::Datadog => ProviderKind::Datadog,
-            Provider::Npm => ProviderKind::Npm,
-            Provider::Dockerhub => ProviderKind::DockerHub,
-            Provider::Openai => ProviderKind::OpenAI,
-            Provider::Anthropic => ProviderKind::Anthropic,
-            Provider::Twilio => ProviderKind::Twilio,
-            Provider::Sendgrid => ProviderKind::SendGrid,
-            Provider::GithubApp => ProviderKind::GithubApp,
+impl Destinations {
+    fn consumers(&self, provider: Provider, secret: &Secret) -> Vec<Consumer> {
+        let mut out = Vec::new();
+        if self.print_secret {
+            out.push(Consumer::Reveal);
         }
+        if self.keychain {
+            out.push(ops::keychain_consumer(provider, secret));
+        }
+        out
     }
 }
 
-/// Build the connector for a provider from environment configuration.
-///
-/// Each provider reads its own admin credential(s) from the environment so no
-/// secret is passed on the command line. AWS and npm reuse their CLI sessions.
-fn build_connector(p: Provider) -> Result<Arc<dyn Connector>> {
-    let env = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
-    let need = |k: &str, hint: &str| -> Result<String> {
-        env(k).with_context(|| format!("set {k} ({hint})"))
-    };
-
-    match p {
-        Provider::Aws => Ok(Arc::new(AwsConnector::new(env("AWS_PROFILE")))),
-
-        Provider::Gitlab => {
-            let token = need("GITLAB_TOKEN", "a PAT with `api` scope")?;
-            let expiry = env("GITLAB_TOKEN_EXPIRY_DAYS").and_then(|s| s.parse().ok());
-            Ok(Arc::new(GitlabConnector::new(
-                env("GITLAB_URL"),
-                token,
-                expiry,
-            )))
-        }
-
-        Provider::Cloudflare => {
-            let token = need("CLOUDFLARE_API_TOKEN", "a token with API Tokens Write")?;
-            Ok(Arc::new(CloudflareConnector::new(token)))
-        }
-
-        Provider::Datadog => {
-            let api = need("DD_API_KEY", "a Datadog API key")?;
-            let app = need("DD_APP_KEY", "a Datadog application key")?;
-            Ok(Arc::new(DatadogConnector::new(env("DD_SITE"), api, app)))
-        }
-
-        Provider::Npm => Ok(Arc::new(NpmConnector::new(env("NPM_REGISTRY")))),
-
-        Provider::Dockerhub => {
-            let user = need("DOCKERHUB_USERNAME", "your Docker Hub username")?;
-            let pass = need("DOCKERHUB_PASSWORD", "password or an existing PAT")?;
-            Ok(Arc::new(DockerHubConnector::new(user, pass)))
-        }
-
-        Provider::Openai => {
-            let key = need("OPENAI_ADMIN_KEY", "an organization admin key")?;
-            Ok(Arc::new(OpenAiConnector::new(key)))
-        }
-
-        Provider::Anthropic => {
-            let key = need("ANTHROPIC_ADMIN_KEY", "an Admin API key")?;
-            Ok(Arc::new(AnthropicConnector::new(key)))
-        }
-
-        Provider::Twilio => {
-            let sid = need("TWILIO_ACCOUNT_SID", "your Account SID")?;
-            let user = env("TWILIO_API_USER").unwrap_or_else(|| sid.clone());
-            let pass = need("TWILIO_AUTH_TOKEN", "Auth Token or API key secret")?;
-            Ok(Arc::new(TwilioConnector::new(sid, user, pass)))
-        }
-
-        Provider::Sendgrid => {
-            let key = need("SENDGRID_API_KEY", "a key with api_keys.* scopes")?;
-            Ok(Arc::new(SendGridConnector::new(key)))
-        }
-
-        Provider::GithubApp => {
-            let app_id = need("GITHUB_APP_ID", "your GitHub App's numeric ID")?;
-            // Accept the PEM inline, or a path to the .pem file.
-            let pem = match env("GITHUB_APP_PRIVATE_KEY") {
-                Some(p) => p,
-                None => {
-                    let path = need(
-                        "GITHUB_APP_PRIVATE_KEY_PATH",
-                        "path to the App's .pem (or set GITHUB_APP_PRIVATE_KEY)",
-                    )?;
-                    std::fs::read_to_string(&path)
-                        .with_context(|| format!("reading App private key at {path}"))?
-                }
-            };
-            Ok(Arc::new(GithubAppConnector::new(app_id, pem)))
-        }
-    }
+fn split_last<'a>(s: &'a str, flag: &str, shape: &str) -> Result<(&'a str, &'a str)> {
+    s.rsplit_once(':')
+        .filter(|(a, b)| !a.is_empty() && !b.is_empty())
+        .with_context(|| format!("--{flag} expects {shape}, got '{s}'"))
 }
 
 fn progress() -> keyrotator_core::engine::ProgressFn {
@@ -173,88 +189,436 @@ fn progress() -> keyrotator_core::engine::ProgressFn {
     })
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
+/// Ask for confirmation in a terminal; without one, require --yes.
+fn confirm(question: &str, yes: bool, ask: bool, default: bool) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+    if !ask {
+        anyhow::bail!("{question} — refusing without confirmation; pass --yes to proceed");
+    }
+    if dialoguer::Confirm::new()
+        .with_prompt(question)
+        .default(default)
+        .interact()?
+    {
+        Ok(())
+    } else {
+        anyhow::bail!("cancelled — nothing was changed")
+    }
+}
+
+/// Turn "401 Unauthorized" into something a person can act on.
+fn explain(provider: Provider, e: RotationError) -> anyhow::Error {
+    let text = e.to_string();
+    let auth = matches!(e, RotationError::NotAuthorized(_))
+        || text.contains("401")
+        || text.contains("403");
+    if auth {
+        anyhow::anyhow!(
+            "{text}\n\n{} rejected the credentials from {}.\n\
+             Check the value is current (not expired or revoked) and has permission to \
+             manage keys. `keyrotator connect {}` tests just that.",
+            keyrotator_core::ProviderKind::from(provider).display_name(),
+            credential_vars(provider),
+            provider.cli_name()
+        )
+    } else {
+        e.into()
+    }
+}
+
+async fn list_keys(provider: Provider, c: &Arc<dyn Connector>) -> Result<Vec<Secret>> {
+    c.list_keys().await.map_err(|e| explain(provider, e))
+}
+
+/// The key named by `id`, or one picked from a list in a terminal.
+fn select_key(
+    provider: Provider,
+    keys: Vec<Secret>,
+    id: Option<String>,
+    current: Option<&str>,
+    ask: bool,
+    verb: &str,
+) -> Result<Secret> {
+    let p = provider.cli_name();
+    match id {
+        Some(id) => keys
+            .into_iter()
+            .find(|k| k.external_id == id)
+            .with_context(|| {
+                format!(
+                    "no key with id {id} in this account. See the ids with: keyrotator list {p}"
+                )
+            }),
+        None if ask => interactive::pick_key(provider, keys, current, verb),
+        None => {
+            let listed: Vec<String> = keys
+                .iter()
+                .map(|k| format!("  {}  {}", k.external_id, k.label))
+                .collect();
+            let example = keys
+                .iter()
+                .find(|k| current != Some(k.external_id.as_str()))
+                .or(keys.first())
+                .map(|k| k.external_id.clone())
+                .unwrap_or_else(|| "12345".into());
+            anyhow::bail!(
+                "which key? Your {p} keys are:\n{}\n\nPass the id, for example:\n  \
+                 keyrotator {verb} {p} {example}",
+                listed.join("\n")
+            )
+        }
+    }
+}
+
+fn print_steps(title: &str, steps: &[String]) {
+    if steps.is_empty() {
+        return;
+    }
+    eprintln!("\n{title}");
+    for (i, s) in steps.iter().enumerate() {
+        eprintln!("  {}. {s}", i + 1);
+    }
+}
+
+fn main() -> Result<()> {
+    let help = format!("{GETTING_STARTED}\n\n{}", banner::plain());
+    let matches = Cli::command().after_help(help).get_matches();
+    let cli = Cli::from_arg_matches(&matches)?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> Result<()> {
+    let config_path = cli.config.as_deref();
+    let ask = interactive::available(cli.no_input);
+    if !matches!(cli.command, Command::Mcp { .. }) {
+        banner::show_once();
+    }
 
     match cli.command {
         Command::Connect { provider } => {
-            let c = build_connector(provider)?;
-            c.connect().await.map_err(|e| anyhow::anyhow!(e))?;
-            println!(
-                "Connected to {}.",
-                ProviderKind::from(provider).display_name()
+            let c = build_connector(provider, ask)?;
+            c.connect().await.map_err(|e| explain(provider, e))?;
+            let p = provider.cli_name();
+            eprintln!("✓ Connected to {}.", c.kind().display_name());
+            eprintln!(
+                "  Next: `keyrotator list {p}` to see your keys, or `keyrotator rotate {p}`."
             );
         }
 
         Command::List { provider } => {
-            let c = build_connector(provider)?;
-            let keys = c.list_keys().await.map_err(|e| anyhow::anyhow!(e))?;
+            let c = build_connector(provider, ask)?;
+            let config = ops::load_config(config_path)?;
+            let mut keys = list_keys(provider, &c).await?;
+            ops::attach_config(&mut keys, config.as_ref().map(|(_, c)| c));
+            let current = c.current_key_id().await;
             if keys.is_empty() {
-                println!("No keys found.");
+                eprintln!("No keys found.");
+                return Ok(());
             }
-            for k in keys {
-                println!("{}  {}  ({})", mask(&k.external_id), k.label, k.principal);
+            let notes = |k: &Secret| {
+                let mut notes = Vec::new();
+                if current.as_deref() == Some(k.external_id.as_str()) {
+                    notes.push("signed in with this key".to_string());
+                }
+                if !k.consumers.is_empty() {
+                    notes.push(format!("{} consumer(s) configured", k.consumers.len()));
+                }
+                notes
+            };
+            if std::io::stdout().is_terminal() {
+                let w = keys
+                    .iter()
+                    .map(|k| k.external_id.len())
+                    .max()
+                    .unwrap_or(2)
+                    .max(2);
+                println!("{:<w$}  NAME", "ID");
+                for k in &keys {
+                    let n = notes(k);
+                    let n = if n.is_empty() {
+                        String::new()
+                    } else {
+                        format!("   ({})", n.join("; "))
+                    };
+                    println!("{:<w$}  {}{n}", k.external_id, k.label);
+                }
+                eprintln!(
+                    "\nRotate one with: keyrotator rotate {} <ID>   (or leave out the ID to pick)",
+                    provider.cli_name()
+                );
+            } else {
+                // Stable, tab-separated output for scripts.
+                for k in &keys {
+                    let n = notes(k);
+                    let n = if n.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  [{}]", n.join("; "))
+                    };
+                    println!("{}\t{}\t{}{n}", k.external_id, k.label, k.principal);
+                }
             }
         }
 
         Command::Rotate {
             provider,
             id,
+            dest,
+            secret_file,
+            dotenv,
+            gh_secret,
+            ssm,
             delete_old_now,
+            yes,
         } => {
-            let c = build_connector(provider)?;
-            let keys = c.list_keys().await.map_err(|e| anyhow::anyhow!(e))?;
-            let secret = keys
-                .into_iter()
-                .find(|s| s.external_id == id)
-                .with_context(|| format!("no key with id {id} for this account"))?;
+            let c = build_connector(provider, ask)?;
+            let config = ops::load_config(config_path)?;
+            let keys = list_keys(provider, &c).await?;
+            let current = c.current_key_id().await;
+            let mut secret = select_key(provider, keys, id, current.as_deref(), ask, "rotate")?;
+            ops::attach_config(
+                std::slice::from_mut(&mut secret),
+                config.as_ref().map(|(_, c)| c),
+            );
+
+            secret.consumers.extend(dest.consumers(provider, &secret));
+            if let Some(path) = secret_file {
+                secret.consumers.push(Consumer::File {
+                    path: path.to_string_lossy().into_owned(),
+                });
+            }
+            for d in &dotenv {
+                secret.consumers.push(guide::parse_dotenv_flag(provider, d));
+            }
+            for g in &gh_secret {
+                let (repo, name) = split_last(g, "gh-secret", "OWNER/REPO:NAME")?;
+                secret.consumers.push(Consumer::GithubActionsSecret {
+                    repo: repo.into(),
+                    secret_name: name.into(),
+                });
+            }
+            for s in &ssm {
+                let (name, region) = split_last(s, "ssm", "NAME:REGION")?;
+                secret.consumers.push(Consumer::AwsSsmParameter {
+                    name: name.into(),
+                    region: region.into(),
+                });
+            }
+
+            let style = c.rotation_style();
+            if secret.consumers.is_empty() && style != RotationStyle::Manual && ask {
+                let (chosen, rememberable) = interactive::choose_destination(provider, &secret)?;
+                if rememberable {
+                    interactive::offer_to_remember(
+                        provider,
+                        &secret,
+                        &chosen,
+                        config.as_ref().map(|(p, _)| p.as_path()),
+                    )?;
+                }
+                secret.consumers.extend(chosen);
+            }
+
+            if current.as_deref() == Some(secret.external_id.as_str()) {
+                eprintln!(
+                    "Heads up: this is the {} keyrotator itself is signed in with ({}). After \
+                     rotating, set {} to the new value.",
+                    guide::noun(provider),
+                    secret.label,
+                    credential_vars(provider)
+                );
+            }
+
+            if ask && style != RotationStyle::Manual && !secret.consumers.is_empty() {
+                let plan = guide::plan(
+                    provider,
+                    style,
+                    c.supports_deactivate(),
+                    &secret,
+                    delete_old_now,
+                );
+                print_steps("Here's what will happen:", &plan);
+                eprintln!();
+                confirm("Go ahead?", yes, ask, true)?;
+            }
 
             let engine = RotationEngine::new(vec![c]).on_progress(progress());
-            println!("Rotating {}…", secret.label);
-            let new_id = engine
+            eprintln!("\nRotating {}…", secret.label);
+            let outcome = engine
                 .rotate(&secret, delete_old_now)
                 .await
-                .map_err(|e| anyhow::anyhow!(e))?;
-            println!("Done. New id: {}", mask(&new_id));
+                .map_err(|e| match e {
+                    RotationError::NoDestination(_) => anyhow::anyhow!(
+                        "{e}\n\nFor example:\n  keyrotator rotate {p} {id} --dotenv .env\n  \
+                         keyrotator rotate {p} {id} --secret-file ./{p}.secret\n\
+                         Or run it in a terminal without --no-input and it'll ask.",
+                        p = provider.cli_name(),
+                        id = secret.external_id
+                    ),
+                    other => explain(provider, other),
+                })?;
+
+            // The secret goes out first so it's never lost to a later error.
+            if let Some(value) = &outcome.revealed_secret {
+                if std::io::stdout().is_terminal() {
+                    eprintln!("\nNew {} (shown once, not stored):", guide::noun(provider));
+                }
+                println!("{value}");
+            }
+            eprintln!();
+            for line in ops::outcome_lines(provider, &secret, &outcome) {
+                eprintln!("{line}");
+            }
+            print_steps(
+                "What to do now:",
+                &guide::next_steps(provider, &secret, &outcome),
+            );
+            if !outcome.is_clean() {
+                std::process::exit(1);
+            }
         }
 
-        Command::RotateAll { provider } => {
-            let c = build_connector(provider)?;
-            let keys = c.list_keys().await.map_err(|e| anyhow::anyhow!(e))?;
+        Command::RotateAll {
+            provider,
+            dest,
+            secret_dir,
+            delete_old_now,
+            yes,
+        } => {
+            let c = build_connector(provider, ask)?;
+            let config = ops::load_config(config_path)?;
+            let mut keys = list_keys(provider, &c).await?;
+            ops::attach_config(&mut keys, config.as_ref().map(|(_, c)| c));
+            let current = c.current_key_id().await;
+            let p = provider.cli_name();
+
+            let mut todo = Vec::new();
+            for mut k in keys {
+                if current.as_deref() == Some(k.external_id.as_str()) {
+                    eprintln!(
+                        "Skipping {} ({}): it's the key keyrotator is signed in with. \
+                         Rotate it on its own with `keyrotator rotate {p} {}`.",
+                        k.label, k.external_id, k.external_id
+                    );
+                    continue;
+                }
+                let extra = dest.consumers(provider, &k);
+                k.consumers.extend(extra);
+                if let Some(dir) = &secret_dir {
+                    let file = format!("{p}-{}.secret", k.external_id);
+                    k.consumers.push(Consumer::File {
+                        path: dir.join(file).to_string_lossy().into_owned(),
+                    });
+                }
+                if k.consumers.is_empty() {
+                    eprintln!(
+                        "Skipping {} ({}): nowhere to deliver its new secret. Set it up once \
+                         with `keyrotator rotate {p} {}` (it asks where it goes and can \
+                         remember), or pass --secret-dir / --print-secret / --keychain.",
+                        k.label, k.external_id, k.external_id
+                    );
+                    continue;
+                }
+                todo.push(k);
+            }
+
+            if todo.is_empty() {
+                anyhow::bail!("nothing to rotate");
+            }
+            eprintln!("\nWill rotate {} key(s):", todo.len());
+            for k in &todo {
+                let to: Vec<_> = k.consumers.iter().map(Consumer::describe).collect();
+                eprintln!("  {}  {}  → {}", k.external_id, k.label, to.join(", "));
+            }
+            confirm(&format!("Rotate {} key(s)?", todo.len()), yes, ask, false)?;
+
             let engine = RotationEngine::new(vec![c]).on_progress(progress());
-
-            println!("Rotating {} key(s)…", keys.len());
-            let results = engine.rotate_all(&keys).await;
-
             let mut failures = 0;
-            for key in &keys {
-                match results.get(&key.id) {
-                    Some(Ok(new_id)) => println!("  ✓ {} → {}", key.label, mask(new_id)),
-                    Some(Err(e)) => {
-                        failures += 1;
-                        println!("  ✗ {}: {e}", key.label);
+            // One at a time: readable output and no burst against rate limits.
+            for k in &todo {
+                eprintln!("\n{} ({})", k.label, k.external_id);
+                match engine.rotate(k, delete_old_now).await {
+                    Ok(outcome) => {
+                        if let Some(value) = &outcome.revealed_secret {
+                            println!("{}\t{}\t{value}", k.label, outcome.new_external_id);
+                        }
+                        for line in ops::outcome_lines(provider, k, &outcome) {
+                            eprintln!("  {line}");
+                        }
+                        if !outcome.is_clean() {
+                            failures += 1;
+                        }
                     }
-                    None => {}
+                    Err(e) => {
+                        failures += 1;
+                        eprintln!("  ✗ not rotated: {}", explain(provider, e));
+                    }
                 }
             }
             if failures > 0 {
-                anyhow::bail!("{failures} key(s) failed to rotate");
+                anyhow::bail!("{failures} key(s) need attention");
             }
+        }
+
+        Command::Retire {
+            provider,
+            id,
+            delete,
+            yes,
+        } => {
+            let c = build_connector(provider, ask)?;
+            let keys = list_keys(provider, &c).await?;
+            let current = c.current_key_id().await;
+            let secret = select_key(provider, keys, id, current.as_deref(), ask, "retire")?;
+            let id = secret.external_id.clone();
+            let action = if delete || !c.supports_deactivate() {
+                "permanently delete"
+            } else {
+                "switch off"
+            };
+            let mut question = format!(
+                "This will {action} {} ({id}). Anything still using it will stop working.",
+                secret.label
+            );
+            if current.as_deref() == Some(id.as_str()) {
+                question.push_str(" It's also the key keyrotator is signed in with!");
+            }
+            question.push_str(" Continue?");
+            confirm(&question, yes, ask, false)?;
+            let engine = RotationEngine::new(vec![c]);
+            let state = engine
+                .retire(provider.into(), &id, delete)
+                .await
+                .map_err(|e| explain(provider, e))?;
+            match state {
+                OldKeyState::Deactivated => eprintln!(
+                    "✓ {} ({id}) is switched off. You can switch it back on in the provider's \
+                     console, or delete it for good with: keyrotator retire {} {id} --delete",
+                    secret.label,
+                    provider.cli_name()
+                ),
+                OldKeyState::Deleted => eprintln!("✓ {} ({id}) deleted.", secret.label),
+                _ => eprintln!("{} ({id}) unchanged.", secret.label),
+            }
+        }
+
+        Command::Mcp {
+            allow_rotate,
+            allow_retire,
+        } => {
+            mcp::serve(mcp::Options {
+                config: cli.config.clone(),
+                allow_rotate,
+                allow_retire,
+            })
+            .await?;
         }
     }
 
     Ok(())
-}
-
-/// Never print a full key id.
-fn mask(id: &str) -> String {
-    if id.chars().count() <= 8 {
-        "••••".into()
-    } else {
-        let chars: Vec<char> = id.chars().collect();
-        let head: String = chars[..4].iter().collect();
-        let tail: String = chars[chars.len() - 4..].iter().collect();
-        format!("{head}…{tail}")
-    }
 }

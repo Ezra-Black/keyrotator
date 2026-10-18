@@ -26,6 +26,7 @@ wrong mid-rotation, it rolls back so you're never left with a broken key.
 - [Providers](#providers)
   - [Per-provider setup](#per-provider-setup)
 - [Keeping consumers in sync](#keeping-consumers-in-sync)
+- [Using it from an AI assistant (MCP)](#using-it-from-an-ai-assistant-mcp)
 - [Where secrets are stored](#where-secrets-are-stored)
 - [Troubleshooting](#troubleshooting)
 - [Security](#security)
@@ -77,17 +78,26 @@ For an **Overlap** provider, `keyrotator rotate` runs these steps in order:
 
 ```
 1. create        mint the new key           (old key still works)
-2. update        push it to every consumer  (.env, CI secrets, SSM…)
-3. verify        confirm the new key authenticates
-4. deactivate    disable the old key        (recoverable)
-5. delete        remove the old key         (after a grace period, or now)
+2. verify        confirm the new key authenticates
+3. update        push it to every consumer  (.env, CI secrets, SSM, file…)
+4. deactivate    disable the old key        (where the provider can)
+5. delete        remove the old key         (with --delete-old-now, or later via `retire`)
 ```
 
-If step 1–3 fails, the new key is deleted and the old one is left untouched.
-You end exactly where you started, nothing broken.
+If step 1–2 fails, or *every* consumer update fails, the new key is deleted and
+the old one is left untouched — you end exactly where you started. If only
+*some* consumers fail, both keys stay live (nothing is broken) and the tool
+tells you which consumers to fix before you retire the old key.
 
-**Atomic** providers skip the overlap: rotate → update consumers → verify.
-**Ephemeral** providers mint → update → verify. **Manual** providers stop and
+**A new secret always has somewhere to go.** `rotate` refuses to start unless
+the key has at least one consumer — a config entry, a destination flag such as
+`--dotenv` or `--secret-file`, or `--print-secret`. A key minted and then
+dropped on the floor is worse than no rotation at all.
+
+**Atomic** providers can't overlap: rotate → update consumers → verify. Every
+consumer is attempted; if all of them fail, the secret is written to an
+owner-only `keyrotator-rescue-*.secret` file rather than lost.
+**Ephemeral** providers mint → verify → update. **Manual** providers stop and
 tell you what to do in the console.
 
 ---
@@ -114,18 +124,15 @@ Or install straight from the repo:
 cargo install --path crates/cli
 ```
 
-### Storing secrets in your OS keychain
+### OS keychain support
 
-By default the tool keeps rotated secrets in memory only (fine for one-shot
-runs). To use the real OS keychain — macOS Keychain, Windows Credential
-Manager, or Linux libsecret — build with the `os-keyring` feature:
+To deliver rotated secrets into your OS keychain (`--keychain`, or a
+`keychain` consumer) — macOS Keychain, Windows Credential Manager, or Linux
+Secret Service — build with the `os-keyring` feature:
 
 ```bash
 cargo build --release --features keyrotator-core/os-keyring
 ```
-
-On Linux this needs libsecret installed (`sudo apt install libsecret-1-dev`, or
-your distro's equivalent).
 
 ### Tools some providers shell out to
 
@@ -141,18 +148,33 @@ tooling.
 
 ## Quick start
 
-Rotate a single AWS access key:
+In a terminal, just run:
 
 ```bash
-aws sso login                        # or your usual sign-in
-keyrotator list aws                  # see your keys
-keyrotator rotate aws AKIAEXAMPLE    # rotate one by id
+keyrotator rotate gitlab
 ```
 
-Rotate every key for a provider at once:
+keyrotator walks you through it: it asks for your GitLab token if
+`GITLAB_TOKEN` isn't set (hidden input, with a link to where you create one),
+lets you pick which token to rotate, asks where the new one should go (a `.env`
+file, a private file, a GitHub Actions secret, your keychain, or just shown
+once), shows exactly what's about to happen, and waits for your OK. It can
+remember where each key goes, so the next rotation is one command and one
+"yes".
+
+Everything it asks can also be given as flags, in any order — handy for
+scripts and CI, where `--no-input` turns questions into clear errors:
 
 ```bash
 export GITLAB_TOKEN=glpat-xxxxxxxxxxxx
+keyrotator rotate gitlab 4821 --dotenv .env                    # writes GITLAB_TOKEN in .env
+keyrotator rotate gitlab 4821 --dotenv .env:MY_TOKEN --yes     # pick the variable, skip the prompt
+```
+
+For anything you rotate more than once, describe its consumers in a
+[`keyrotator.toml`](#keeping-consumers-in-sync) and then it's just:
+
+```bash
 keyrotator rotate-all gitlab
 ```
 
@@ -165,20 +187,53 @@ command line, so nothing sensitive lands in your shell history). The
 ## Commands
 
 ```
-keyrotator connect     <provider>            check credentials and access
-keyrotator list        <provider>            list the keys for an account
-keyrotator rotate      <provider> <id>       rotate one key by its id
-keyrotator rotate      <provider> <id> --delete-old-now
-keyrotator rotate-all  <provider>            rotate every discovered key
+keyrotator connect     <provider>                 check credentials and access
+keyrotator list        <provider>                 list keys and their ids
+keyrotator rotate      <provider> <id> [dest...]  rotate one key
+keyrotator rotate-all  <provider> [dest...]       rotate every key that has a destination
+keyrotator retire      <provider> <id>            revoke a key you no longer use
+keyrotator mcp                                    run as an MCP server (see below)
 ```
 
 - `<provider>` is one of: `aws`, `gitlab`, `cloudflare`, `datadog`, `npm`,
   `dockerhub`, `openai`, `anthropic`, `twilio`, `sendgrid`, `github-app`.
-- `<id>` is the key's native id, exactly as shown by `list` (an AWS access key
-  id, a GitLab token id, a Cloudflare token id, and so on).
-- `--delete-old-now` deletes the old key immediately instead of leaving it
-  disabled for the grace period. Use it for providers that have no "disabled"
-  state (see the notes below).
+- `<id>` is the key's native id, exactly as printed by `list` (first column).
+- Leave out `<id>` (or anything else) in a terminal and keyrotator asks.
+  `--no-input` makes it fail with an explanation instead; `--yes` skips the
+  "go ahead?" question.
+- `--config <path>` picks a config file; otherwise `./keyrotator.toml`, then
+  `~/.config/keyrotator/config.toml`, is used if present.
+
+Where the new secret goes (combine as many as you like; config consumers are
+always included):
+
+| Flag | Destination |
+|------|-------------|
+| `--print-secret` | stdout — the only thing written there, so `$(…)` captures it cleanly |
+| `--secret-file <path>` | a file created owner-only (0600) |
+| `--dotenv <path>[:<VAR>]` | sets `VAR` in a `.env` file; `VAR` defaults to the provider's usual name (e.g. `GITLAB_TOKEN`; for AWS both `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`). Repeatable |
+| `--gh-secret <owner/repo>:<NAME>` | a GitHub Actions secret via `gh` (repeatable) |
+| `--ssm <name>:<region>` | an AWS SSM `SecureString` (repeatable) |
+| `--keychain` | the OS keychain, service `keyrotator` (needs `os-keyring`) |
+| `--secret-dir <dir>` | `rotate-all` only: one 0600 file per key |
+
+Other options:
+
+- `--delete-old-now` deletes the old key as soon as the new one is delivered.
+  Without it, the old key is deactivated where the provider supports that (AWS)
+  and otherwise **left active** — the output says which, and gives you the
+  `retire` command to run once nothing uses it.
+- `rotate-all` lists what it's about to do and asks for confirmation (`--yes`
+  to skip). It skips keys with nowhere to deliver a secret, and the key you're
+  signed in with when the provider can tell (GitLab, Cloudflare, Twilio, AWS
+  static keys).
+- `retire` deactivates a key where the provider supports it, otherwise deletes
+  it; `--delete` also deletes a deactivated key. It asks for confirmation
+  (`--yes` to skip).
+
+Status goes to stderr. A rotation that changed something but needs attention
+(a consumer failed, the old key couldn't be deactivated) exits non-zero after
+printing exactly what's left to do.
 
 Run `connect` first whenever you set up a new provider — it's a cheap check that
 your credentials are right before you try to rotate anything.
@@ -217,8 +272,15 @@ makes safe overlap possible.
 
 ```bash
 aws sso login
-keyrotator rotate aws AKIAEXAMPLE --delete-old-now
+keyrotator rotate aws AKIAEXAMPLE --dotenv .env:AWS_SECRET_ACCESS_KEY
 ```
+
+AWS keys come as a pair: the new **access key id** is printed on stderr, and a
+`.env` consumer in `keyrotator.toml` can write it too with
+`id_variable = "AWS_ACCESS_KEY_ID"` (see
+[Keeping consumers in sync](#keeping-consumers-in-sync)). Without
+`--delete-old-now` the old key is set to Inactive, so you can flip it back on in
+the IAM console if something was missed.
 
 **Gotcha:** if the user already has two access keys, rotation refuses rather
 than guessing which to destroy. Delete the unused one first.
@@ -236,12 +298,13 @@ revokes the old one in a single call (Atomic).
 ```bash
 export GITLAB_TOKEN=glpat-xxxxxxxxxxxx
 keyrotator list gitlab
-keyrotator rotate gitlab 4821          # 4821 = token id from `list`
+keyrotator rotate gitlab 4821 --dotenv .env:GITLAB_TOKEN   # 4821 = id from `list`
 ```
 
-**Gotcha:** don't rotate the same token you're authenticating with — it'll
-invalidate `GITLAB_TOKEN` mid-run. Rotate *other* token ids, or grab the new
-value from the output and update `GITLAB_TOKEN`.
+**Gotcha:** rotating the token you're authenticating with invalidates
+`GITLAB_TOKEN`. `list` marks that token, `rotate-all` skips it, and if you
+rotate it on purpose, give it a destination (e.g. `--print-secret`) and update
+`GITLAB_TOKEN` afterwards.
 
 #### Cloudflare
 
@@ -268,12 +331,12 @@ application key.
 
 ```bash
 export DD_API_KEY=xxxxxxxx DD_APP_KEY=yyyyyyyy
-keyrotator rotate datadog <api-key-id> --delete-old-now
+keyrotator rotate datadog <api-key-id> --dotenv .env:DD_API_KEY --delete-old-now
 ```
 
-**Gotcha:** Datadog keys have no "disabled" state, so the old key is only
-revoked at the delete step. Use `--delete-old-now` (or the grace-period delete)
-to actually retire it.
+**Gotcha:** Datadog keys have no "disabled" state, so the old key keeps working
+until it's deleted. Use `--delete-old-now`, or run `keyrotator retire datadog
+<old-id>` once nothing uses it.
 
 #### npm
 
@@ -284,7 +347,7 @@ Rotates classic automation tokens via the `npm` CLI.
 
 ```bash
 npm login
-keyrotator rotate-all npm
+keyrotator rotate-all npm --secret-dir ~/secrets
 ```
 
 **Gotcha:** the `npm` CLI has no stable machine-readable output for tokens, so
@@ -301,8 +364,11 @@ Rotates personal access tokens.
 
 ```bash
 export DOCKERHUB_USERNAME=you DOCKERHUB_PASSWORD=xxxxxxxx
-keyrotator rotate dockerhub <token-uuid> --delete-old-now
+keyrotator rotate dockerhub <token-uuid> --secret-file ~/secrets/dockerhub --delete-old-now
 ```
+
+**Note:** the new token is created with `repo:read` + `repo:write` scopes,
+whatever the old one had.
 
 #### OpenAI
 
@@ -313,7 +379,7 @@ Rotates organization **admin** keys.
 
 ```bash
 export OPENAI_ADMIN_KEY=sk-admin-xxxxxxxx
-keyrotator rotate openai <key-id> --delete-old-now
+keyrotator rotate openai <key-id> --keychain --delete-old-now
 ```
 
 **Note:** this rotates *admin* keys. The `sk-...` project keys your apps use are
@@ -332,8 +398,9 @@ auto-rotate here.
 ```bash
 export ANTHROPIC_ADMIN_KEY=sk-ant-admin-xxxxxxxx
 keyrotator rotate anthropic <key-id>
-# → prints the Console URL and steps; revoke the old key once you've made
-#   the new one and pointed your apps at it.
+# → prints the Console URL and steps. Once you've made the new key and
+#   pointed your apps at it, revoke the old one:
+keyrotator retire anthropic <key-id>
 ```
 
 #### Twilio
@@ -347,7 +414,7 @@ Rotates Standard API keys.
 
 ```bash
 export TWILIO_ACCOUNT_SID=ACxxxxxxxx TWILIO_AUTH_TOKEN=xxxxxxxx
-keyrotator rotate twilio <key-sid> --delete-old-now
+keyrotator rotate twilio <key-sid> --dotenv .env:TWILIO_API_SECRET --delete-old-now
 ```
 
 #### SendGrid
@@ -360,7 +427,7 @@ Rotates API keys, carrying over the old key's scopes to the new one.
 
 ```bash
 export SENDGRID_API_KEY=SG.xxxxxxxx
-keyrotator rotate-all sendgrid
+keyrotator rotate-all sendgrid --keychain
 ```
 
 #### GitHub App
@@ -378,7 +445,7 @@ new one — the old token expires by itself.
 export GITHUB_APP_ID=123456
 export GITHUB_APP_PRIVATE_KEY_PATH=~/secrets/my-app.private-key.pem
 keyrotator list github-app                 # shows each installation
-keyrotator rotate github-app <installation-id>
+keyrotator rotate github-app <installation-id> --dotenv .env:GITHUB_TOKEN
 ```
 
 The only long-lived secret is the App private key, which you rotate rarely (and
@@ -388,29 +455,104 @@ can hold two of) in the App's settings.
 
 ## Keeping consumers in sync
 
-A "consumer" is any place that uses a key and must be updated when it rotates.
-The tool currently knows how to update:
+A "consumer" is any place that uses a key and must be updated when it rotates:
 
-- **`.env` files** — rewrites a single `VAR=...` line in place, leaving the rest
-  of the file alone.
+- **`.env` files** — rewrites one `VAR=...` line in place (keeping `export`,
+  the rest of the file, its permissions and trailing newline), atomically.
 - **GitHub Actions secrets** — via `gh secret set`.
 - **AWS SSM Parameter Store** — as a `SecureString`.
+- **A file** — the raw secret, owner-only.
+- **The OS keychain** — with the `os-keyring` feature.
 
-When you attach consumers to a key, rotation updates them automatically between
-minting the new key and retiring the old one. In this first release consumers
-are defined in code (see `Consumer` in `crates/core/src/models.rs`); wiring them
-up through a config file is on the roadmap.
+Describe them once in `keyrotator.toml` (in the current directory, or
+`~/.config/keyrotator/config.toml`). See
+[`keyrotator.toml.example`](keyrotator.toml.example) for every option.
+
+```toml
+[[keys]]
+provider = "gitlab"
+name = "ci-deploy"                  # match by name, id, and/or principal
+consumers = [
+  { type = "dot_env_file", path = ".env", variable = "GITLAB_TOKEN" },
+  { type = "github_actions_secret", repo = "me/my-app", secret_name = "GITLAB_TOKEN" },
+]
+
+[[keys]]
+provider = "aws"
+principal = "ci-user"               # the IAM user — survives the new key id
+consumers = [
+  { type = "dot_env_file", path = ".env", variable = "AWS_SECRET_ACCESS_KEY", id_variable = "AWS_ACCESS_KEY_ID" },
+  { type = "aws_ssm_parameter", name = "/ci/aws-secret", region = "us-east-1" },
+]
+```
+
+Match on `name` or `principal` rather than `id` for providers that issue a new
+id on every rotation (AWS, GitLab, Datadog, OpenAI, Twilio, SendGrid, Docker
+Hub); otherwise the entry stops matching after the first rotation. Relative
+paths are relative to the config file. `keyrotator list` shows how many
+consumers each key has.
+
+---
+
+## Using it from an AI assistant (MCP)
+
+`keyrotator mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server on stdio, so Claude and other MCP clients can check, list and rotate
+your keys.
+
+```json
+{
+  "mcpServers": {
+    "keyrotator": {
+      "command": "keyrotator",
+      "args": ["mcp", "--config", "/Users/me/.config/keyrotator/config.toml"],
+      "env": { "GITLAB_TOKEN": "glpat-…" }
+    }
+  }
+}
+```
+
+With Claude Code:
+
+```bash
+claude mcp add keyrotator -- keyrotator mcp
+```
+
+| Tool | Available | What it does |
+|------|-----------|--------------|
+| `list_providers` | always | providers, rotation style, whether credentials are set |
+| `check_connection` | always | runs `connect` for a provider |
+| `list_keys` | always | key ids, names, configured consumers, which key the server signs in with |
+| `rotate_key` | with `--allow-rotate` | rotates one key into its configured consumers |
+| `retire_key` | with `--allow-retire` | deactivates/deletes an old key |
+
+Guardrails, because the assistant is driving:
+
+- **Read-only by default.** The write tools don't exist unless you start the
+  server with `--allow-rotate` / `--allow-retire`, and they're marked
+  destructive so your client asks before each call.
+- **Secrets never reach the model.** `rotate_key` returns ids and a summary,
+  never a secret value.
+- **The assistant can't choose where secrets go.** `rotate_key` only delivers
+  to consumers in *your* config file — it has no destination arguments, so it
+  can't route a secret somewhere it could read. Keys with no configured
+  consumers are refused.
+- `retire_key` refuses to revoke the key the server itself is signed in with.
 
 ---
 
 ## Where secrets are stored
 
-- With `--features os-keyring`, rotated secret values go into your OS keychain
-  (macOS Keychain, Windows Credential Manager, or libsecret).
-- Without it, they're kept in memory for the duration of the run only.
-- Secrets passed to CLIs (`aws`, `npm`, `gh`) are passed through the environment,
-  not the argument list, so they don't show up in `ps`.
-- The tool never prints a full key id or secret — ids are masked in output.
+- New secret values go only to the consumers you configure or pass as flags.
+  Nothing is cached by the tool between runs.
+- Files the tool creates (`--secret-file`, `--secret-dir`, rescue files, new
+  `.env` files) are owner-only (0600); existing `.env` files keep their
+  permissions.
+- Secrets handed to `gh` and `aws` go over **stdin**, never the argument list,
+  so they don't show up in `ps`.
+- Secret values are never printed unless you pass `--print-secret`, and are
+  never returned over MCP. Key *ids* are printed in full — they're identifiers,
+  not secrets, and you need them for `rotate` and `retire`.
 
 ---
 
@@ -427,17 +569,29 @@ IAM console (or with `aws iam delete-access-key`) and retry.
 
 **The old key is still active after rotating.**
 For Datadog, Twilio, SendGrid, OpenAI, and Docker Hub there's no "disabled"
-state — the old key lives until it's deleted. Add `--delete-old-now`, or let the
-grace-period delete run.
+state — the old key lives until it's deleted. Add `--delete-old-now`, or run
+`keyrotator retire <provider> <old-id>` once nothing uses it.
+
+**`nowhere to put the new secret … refusing to rotate`.**
+Working as intended: nothing was changed. Give the key a destination — a
+`keyrotator.toml` entry, or a flag such as `--dotenv`, `--secret-file` or
+`--print-secret`.
+
+**`Partially rotated; old key kept`.**
+Some consumers got the new key and some didn't. Both keys still work, so
+nothing is broken. Fix the failed consumer (the error says which), then
+`retire` the old key.
 
 **`verification failed`.**
 The new key didn't authenticate. For AWS this is usually propagation delay (the
-tool already retries for a few seconds). For an Atomic provider (GitLab,
-Cloudflare) the old secret is already gone, so re-run `rotate` to mint another.
+tool already retries for a few seconds), and the new key has already been
+removed again. For an Atomic provider (GitLab, Cloudflare) the old secret is
+already gone, so re-run `rotate` to mint another.
 
 **My GitLab/OpenAI/Anthropic token stopped working right after rotating.**
-You rotated the same credential you were authenticating with. Rotate a
-*different* key id, or take the new value from the output and update the env var.
+You rotated the same credential you were authenticating with. Take the new value
+from wherever you delivered it and update the env var. (`list` marks that key,
+and `rotate-all` skips it where the provider can tell.)
 
 **`could not parse a new token from npm token create` (npm).**
 npm changed its CLI output format for your version. This connector is
@@ -481,8 +635,14 @@ walkthrough, including which rotation style to pick and which existing connector
 to copy.
 
 Good first additions: GitHub Actions as a first-class provider, Google Cloud and
-Azure service-account keys, OpenAI project keys via service accounts, and a
-config file for defining consumers.
+Azure service-account keys, OpenAI project keys via service accounts, and more
+consumer types (Vault, Kubernetes secrets, Vercel/Netlify env vars).
+
+## Credits
+
+keyrotator is created by **Ezra Black**. If it saved you time, please consider
+[contributing](https://github.com/Ezra-Black/keyrotator) and supporting the
+creator at [ezrablack.dev](https://www.ezrablack.dev).
 
 ## License
 

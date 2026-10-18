@@ -134,6 +134,13 @@ impl Connector for TwilioConnector {
         }
     }
 
+    async fn current_key_id(&self) -> Option<String> {
+        // Authenticating with an API key (SK…) rather than the Account SID.
+        self.auth_user
+            .starts_with("SK")
+            .then(|| self.auth_user.clone())
+    }
+
     async fn delete_old(&self, external_id: &str) -> Result<(), RotationError> {
         let resp = self
             .client

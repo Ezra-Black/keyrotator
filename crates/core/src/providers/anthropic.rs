@@ -113,6 +113,10 @@ impl Connector for AnthropicConnector {
         Ok(())
     }
 
+    fn supports_deactivate(&self) -> bool {
+        true
+    }
+
     async fn deactivate_old(&self, external_id: &str) -> Result<(), RotationError> {
         // Admin API updates a key's status; "inactive" revokes it.
         let body = serde_json::json!({ "status": "inactive" });

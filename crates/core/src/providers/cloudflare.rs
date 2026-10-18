@@ -124,7 +124,22 @@ impl Connector for CloudflareConnector {
         }
     }
 
-    // deactivate_old / delete_old: default no-ops — roll already killed the old value.
+    async fn current_key_id(&self) -> Option<String> {
+        let resp = self
+            .client
+            .get(self.url("/user/tokens/verify"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let v: serde_json::Value = resp.json().await.ok()?;
+        v["result"]["id"].as_str().map(str::to_string)
+    }
+
+    // No deactivate_old / delete_old: the roll already killed the old value.
 }
 
 #[derive(Deserialize)]

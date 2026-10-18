@@ -10,8 +10,8 @@ use crate::models::{NewCredential, ProviderKind, RotationError, RotationStyle, S
 ///
 /// For `RotationStyle::AtomicRotate` providers, `create` performs the whole
 /// rotate (new secret out, old one revoked by the provider), and
-/// `deactivate_old` / `delete_old` are no-ops. For `Overlap`, `create` only
-/// mints the new secret and the engine later calls deactivate/delete.
+/// `deactivate_old` / `delete_old` are not called. For `Overlap`, `create`
+/// only mints the new secret and the engine later calls deactivate/delete.
 #[async_trait]
 pub trait Connector: Send + Sync {
     fn kind(&self) -> ProviderKind;
@@ -36,13 +36,33 @@ pub trait Connector: Send + Sync {
     /// Prove the new credential actually authenticates.
     async fn verify(&self, credential: &NewCredential) -> Result<(), RotationError>;
 
-    /// Disable the old credential but keep it recoverable. (Overlap only.)
-    async fn deactivate_old(&self, _external_id: &str) -> Result<(), RotationError> {
-        Ok(())
+    /// Whether the provider has a recoverable "disabled" state for keys.
+    /// When false, the old key stays fully live until `delete_old`.
+    fn supports_deactivate(&self) -> bool {
+        false
     }
 
-    /// Permanently remove the old credential. (Overlap only; after grace period.)
+    /// The external id of the credential this connector authenticates with,
+    /// when the provider can tell us. Used to avoid rotating or retiring the
+    /// key you're logged in with by accident.
+    async fn current_key_id(&self) -> Option<String> {
+        None
+    }
+
+    /// Disable the old credential but keep it recoverable. Only called when
+    /// `supports_deactivate` is true.
+    async fn deactivate_old(&self, _external_id: &str) -> Result<(), RotationError> {
+        Err(RotationError::NotImplemented(format!(
+            "{} keys have no disabled state",
+            self.kind().display_name()
+        )))
+    }
+
+    /// Permanently remove the old credential.
     async fn delete_old(&self, _external_id: &str) -> Result<(), RotationError> {
-        Ok(())
+        Err(RotationError::NotImplemented(format!(
+            "{} keys can't be deleted through this tool",
+            self.kind().display_name()
+        )))
     }
 }
