@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::ops;
-use crate::providers::{build_connector, Provider};
+use crate::providers::{self, build_connector, Provider};
 
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -246,16 +246,18 @@ fn style_name(s: RotationStyle) -> &'static str {
 fn list_providers() -> Result<Value> {
     let rows: Vec<Value> = Provider::value_variants()
         .iter()
-        .map(|p| match build_connector(*p, false) {
-            Ok(c) => json!({
-                "provider": p.cli_name(),
-                "style": style_name(c.rotation_style()),
-                "credentials": "set",
-            }),
-            Err(e) => json!({
-                "provider": p.cli_name(),
-                "credentials": format!("missing: {e}"),
-            }),
+        .map(|p| {
+            match providers::resolve(*p, false).and_then(|r| providers::connector_from(*p, &r)) {
+                Ok(c) => json!({
+                    "provider": p.cli_name(),
+                    "style": style_name(c.rotation_style()),
+                    "credentials": crate::login::status_word(*p),
+                }),
+                Err(e) => json!({
+                    "provider": p.cli_name(),
+                    "credentials": format!("missing: {e}"),
+                }),
+            }
         })
         .collect();
     Ok(json!({ "providers": rows }))
@@ -263,14 +265,14 @@ fn list_providers() -> Result<Value> {
 
 async fn check_connection(args: &Value) -> Result<Value> {
     let p = arg_provider(args)?;
-    let c = build_connector(p, false)?;
+    let c = build_connector(p, false).await?;
     c.connect().await?;
     Ok(json!({ "provider": p.cli_name(), "connected": true }))
 }
 
 async fn list_keys(opts: &Options, args: &Value) -> Result<Value> {
     let p = arg_provider(args)?;
-    let c = build_connector(p, false)?;
+    let c = build_connector(p, false).await?;
     let config = ops::load_config(opts.config.as_deref())?;
     let mut keys = c.list_keys().await?;
     ops::attach_config(&mut keys, config.as_ref().map(|(_, c)| c));
@@ -300,7 +302,7 @@ async fn rotate_key(opts: &Options, args: &Value) -> Result<Value> {
     let id = arg_str(args, "id")?;
     let delete_old = arg_bool(args, "delete_old");
 
-    let c = build_connector(p, false)?;
+    let c = build_connector(p, false).await?;
     let config = ops::load_config(opts.config.as_deref())?;
     let Some((config_path, config)) = config else {
         anyhow::bail!(
@@ -359,7 +361,7 @@ async fn retire_key(args: &Value) -> Result<Value> {
     let p = arg_provider(args)?;
     let id = arg_str(args, "id")?;
     let delete = arg_bool(args, "delete");
-    let c = build_connector(p, false)?;
+    let c = build_connector(p, false).await?;
     if c.current_key_id().await.as_deref() == Some(id) {
         anyhow::bail!(
             "{id} is the key this server is signed in with; retiring it over MCP is refused. \

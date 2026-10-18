@@ -151,6 +151,11 @@ pub fn describe_target(c: &Consumer) -> String {
         }
         Consumer::AwsSsmParameter { name, region } => format!("SSM parameter {name} ({region})"),
         Consumer::File { path } => format!("{} (only you can read it)", pretty_path(path)),
+        Consumer::Keychain { service, .. }
+            if service == keyrotator_core::credstore::LOGIN_SERVICE =>
+        {
+            "your saved keyrotator login".into()
+        }
         Consumer::Keychain { .. } => "your keychain".into(),
         Consumer::Reveal => "your screen (shown once, not stored)".into(),
     }

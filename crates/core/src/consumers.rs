@@ -8,9 +8,6 @@ use tokio::process::Command;
 
 use crate::models::{Consumer, NewCredential, RotationError};
 
-/// Whether this build can write to the OS keychain (`os-keyring` feature).
-pub const KEYCHAIN_SUPPORTED: bool = cfg!(feature = "os-keyring");
-
 /// Pushes a freshly minted secret value to every place that consumes it.
 /// A new key is useless until `.env` files, CI secrets, SSM params, etc. carry
 /// it — this is the half of rotation that keeps the user's apps from breaking.
@@ -114,19 +111,9 @@ async fn run_with_stdin(mut cmd: Command, input: &str, what: &str) -> Result<(),
     }
 }
 
-#[cfg(feature = "os-keyring")]
 fn keychain_set(service: &str, account: &str, value: &str) -> Result<(), RotationError> {
-    keyring::Entry::new(service, account)
-        .and_then(|e| e.set_password(value))
+    crate::credstore::set(service, account, value)
         .map_err(|e| RotationError::ConsumerUpdate(format!("keychain {service}/{account}: {e}")))
-}
-
-#[cfg(not(feature = "os-keyring"))]
-fn keychain_set(service: &str, account: &str, _value: &str) -> Result<(), RotationError> {
-    Err(RotationError::ConsumerUpdate(format!(
-        "keychain {service}/{account}: this build has no keychain support \
-         (rebuild with --features keyrotator-core/os-keyring)"
-    )))
 }
 
 /// Set `variable` in a `.env` file, preserving every other line, the file's

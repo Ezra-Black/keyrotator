@@ -1,6 +1,7 @@
 mod banner;
 mod guide;
 mod interactive;
+mod login;
 mod mcp;
 mod ops;
 mod providers;
@@ -16,11 +17,13 @@ use keyrotator_core::{
     Secret,
 };
 
-use crate::providers::{build_connector, credential_vars, Provider};
+use crate::providers::{
+    build_connector, credential_source_note, login_token_var, Provider, Source,
+};
 
 const GETTING_STARTED: &str = "\
 Getting started:
-  1. keyrotator connect gitlab     check your credentials (it explains what to set)
+  1. keyrotator login gitlab       save your GitLab token once (works in every terminal)
   2. keyrotator rotate gitlab      pick a key, choose where the new one goes, done
 
 In a terminal, keyrotator asks for anything you leave out. Flags can go in any
@@ -48,6 +51,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Save a provider's credentials in your OS keychain, so keyrotator works
+    /// in any terminal without exporting anything. Run with no provider to
+    /// see what's saved.
+    Login {
+        #[arg(value_enum)]
+        provider: Option<Provider>,
+        /// Self-hosted GitLab URL (e.g. https://gitlab.example.com), or the
+        /// Datadog site (e.g. datadoghq.eu).
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// Remove a provider's saved credentials (doesn't revoke them).
+    Logout {
+        #[arg(value_enum)]
+        provider: Option<Provider>,
+    },
     /// Check that a provider's credentials work and you can manage its keys.
     Connect {
         #[arg(value_enum)]
@@ -215,13 +234,27 @@ fn explain(provider: Provider, e: RotationError) -> anyhow::Error {
         || text.contains("401")
         || text.contains("403");
     if auth {
+        let p = provider.cli_name();
+        let shadowed = providers::env_shadows_saved_login(provider);
+        let fix = if let Some(var) = shadowed {
+            format!(
+                "You also have a saved login, but {var} in this terminal overrides it. \
+                 Run `unset {var}` to use the saved login."
+            )
+        } else if credential_source_note(provider).contains("saved login") {
+            format!(
+                "Your saved login may be expired or revoked. Replace it with: keyrotator login {p}"
+            )
+        } else {
+            format!(
+                "Check the value is current (not expired or revoked) and has permission to \
+                 manage keys. `keyrotator connect {p}` tests just that."
+            )
+        };
         anyhow::anyhow!(
-            "{text}\n\n{} rejected the credentials from {}.\n\
-             Check the value is current (not expired or revoked) and has permission to \
-             manage keys. `keyrotator connect {}` tests just that.",
-            keyrotator_core::ProviderKind::from(provider).display_name(),
-            credential_vars(provider),
-            provider.cli_name()
+            "{text}\n\n{} rejected {}.\n{fix}",
+            provider.display_name(),
+            credential_source_note(provider),
         )
     } else {
         e.into()
@@ -300,18 +333,27 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     match cli.command {
+        Command::Login { provider, url } => login::login(provider, url, ask).await?,
+
+        Command::Logout { provider } => login::logout(provider, ask)?,
+
         Command::Connect { provider } => {
-            let c = build_connector(provider, ask)?;
+            let c = build_connector(provider, ask).await?;
             c.connect().await.map_err(|e| explain(provider, e))?;
             let p = provider.cli_name();
-            eprintln!("✓ Connected to {}.", c.kind().display_name());
+            let who = c
+                .account_name()
+                .await
+                .map(|a| format!(" as {a}"))
+                .unwrap_or_default();
+            eprintln!("✓ Connected to {}{who}.", c.kind().display_name());
             eprintln!(
                 "  Next: `keyrotator list {p}` to see your keys, or `keyrotator rotate {p}`."
             );
         }
 
         Command::List { provider } => {
-            let c = build_connector(provider, ask)?;
+            let c = build_connector(provider, ask).await?;
             let config = ops::load_config(config_path)?;
             let mut keys = list_keys(provider, &c).await?;
             ops::attach_config(&mut keys, config.as_ref().map(|(_, c)| c));
@@ -347,9 +389,14 @@ async fn run(cli: Cli) -> Result<()> {
                     };
                     println!("{:<w$}  {}{n}", k.external_id, k.label);
                 }
+                let example = keys
+                    .iter()
+                    .find(|k| current.as_deref() != Some(k.external_id.as_str()))
+                    .unwrap_or(&keys[0]);
                 eprintln!(
-                    "\nRotate one with: keyrotator rotate {} <ID>   (or leave out the ID to pick)",
-                    provider.cli_name()
+                    "\nRotate one with: keyrotator rotate {} {}   (or leave out the ID to pick from a list)",
+                    provider.cli_name(),
+                    example.external_id
                 );
             } else {
                 // Stable, tab-separated output for scripts.
@@ -376,7 +423,7 @@ async fn run(cli: Cli) -> Result<()> {
             delete_old_now,
             yes,
         } => {
-            let c = build_connector(provider, ask)?;
+            let c = build_connector(provider, ask).await?;
             let config = ops::load_config(config_path)?;
             let keys = list_keys(provider, &c).await?;
             let current = c.current_key_id().await;
@@ -410,6 +457,41 @@ async fn run(cli: Cli) -> Result<()> {
                 });
             }
 
+            // Rotating the token keyrotator itself signs in with: keep a saved
+            // login pointing at the new token so you aren't locked out.
+            if current.as_deref() == Some(secret.external_id.as_str()) {
+                let n = guide::noun(provider);
+                match login_token_var(provider).map(|v| (v, providers::source_of(v))) {
+                    Some((var, Some(Source::Saved | Source::Prompt)))
+                        if keyrotator_core::credstore::get(
+                            keyrotator_core::credstore::LOGIN_SERVICE,
+                            var,
+                        )
+                        .is_some() =>
+                    {
+                        eprintln!(
+                            "This is the {n} keyrotator signs in with. Your saved login will be \
+                             updated to the new {n} automatically."
+                        );
+                        secret.consumers.push(Consumer::Keychain {
+                            service: keyrotator_core::credstore::LOGIN_SERVICE.into(),
+                            account: var.into(),
+                        });
+                    }
+                    Some((var, _)) => eprintln!(
+                        "Heads up: this is the {n} keyrotator signs in with ({var}). After \
+                         rotating, update {var} to the new value — or run `keyrotator login {}` \
+                         so keyrotator keeps track of it for you.",
+                        provider.cli_name()
+                    ),
+                    None => eprintln!(
+                        "Heads up: this is the {n} keyrotator signs in with ({}). After \
+                         rotating, update it to the new value.",
+                        secret.label
+                    ),
+                }
+            }
+
             let style = c.rotation_style();
             if secret.consumers.is_empty() && style != RotationStyle::Manual && ask {
                 let (chosen, rememberable) = interactive::choose_destination(provider, &secret)?;
@@ -422,16 +504,6 @@ async fn run(cli: Cli) -> Result<()> {
                     )?;
                 }
                 secret.consumers.extend(chosen);
-            }
-
-            if current.as_deref() == Some(secret.external_id.as_str()) {
-                eprintln!(
-                    "Heads up: this is the {} keyrotator itself is signed in with ({}). After \
-                     rotating, set {} to the new value.",
-                    guide::noun(provider),
-                    secret.label,
-                    credential_vars(provider)
-                );
             }
 
             if ask && style != RotationStyle::Manual && !secret.consumers.is_empty() {
@@ -490,7 +562,7 @@ async fn run(cli: Cli) -> Result<()> {
             delete_old_now,
             yes,
         } => {
-            let c = build_connector(provider, ask)?;
+            let c = build_connector(provider, ask).await?;
             let config = ops::load_config(config_path)?;
             let mut keys = list_keys(provider, &c).await?;
             ops::attach_config(&mut keys, config.as_ref().map(|(_, c)| c));
@@ -571,7 +643,7 @@ async fn run(cli: Cli) -> Result<()> {
             delete,
             yes,
         } => {
-            let c = build_connector(provider, ask)?;
+            let c = build_connector(provider, ask).await?;
             let keys = list_keys(provider, &c).await?;
             let current = c.current_key_id().await;
             let secret = select_key(provider, keys, id, current.as_deref(), ask, "retire")?;
