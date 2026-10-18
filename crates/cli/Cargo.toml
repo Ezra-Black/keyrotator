@@ -1,0 +1,15 @@
+[package]
+name = "keyrotator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "keyrotator"
+path = "src/main.rs"
+
+[dependencies]
+keyrotator-core = { path = "../core" }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }

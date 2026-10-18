@@ -1,0 +1,28 @@
+[package]
+name = "keyrotator-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+jsonwebtoken = { workspace = true }
+
+# OS keychain support is optional so the crate builds on bare Linux/CI without
+# libsecret/dbus. Enable `--features os-keyring` on macOS/Windows for real
+# Keychain / Credential Manager storage.
+keyring = { version = "2", optional = true }
+
+[features]
+default = []
+os-keyring = ["dep:keyring"]
+
+[dev-dependencies]
+tokio = { workspace = true }
