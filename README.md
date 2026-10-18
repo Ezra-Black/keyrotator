@@ -31,15 +31,74 @@ Service) is built in. `--no-default-features` on `keyrotator-core` removes it.
 
 ## Quick start
 
+Practice on a throwaway GitLab token first. Every command below is safe to
+copy; replace `28550311` with your own ids from step 3.
+
+**1. Make a throwaway token to rotate.** In GitLab → *Access tokens*, create a
+token named `kr-test` (any scope).
+
+**2. Log in.** Opens GitLab's token page with the name and `api` scope
+pre-filled. Click *Create token*, paste it back (input is hidden).
+
 ```bash
-keyrotator login gitlab        # verify + save the credential in your keychain
-keyrotator rotate gitlab       # pick a key, pick a destination, confirm
+keyrotator login gitlab
+```
+```
+Checking with GitLab…
+✓ Logged in to GitLab as @you. Saved to your macOS Keychain.
+  keyrotator now works from any terminal — nothing to export.
 ```
 
-Fully non-interactive:
+**3. Find the key id.**
 
 ```bash
-keyrotator rotate gitlab 4821 --dotenv .env --yes --no-input
+keyrotator list gitlab
+```
+```
+ID        NAME
+28550267  keyrotator   (signed in with this key)
+28550311  kr-test
+```
+
+**4. Rotate it into a .env file.** keyrotator shows the plan and waits for you.
+
+```bash
+keyrotator rotate gitlab 28550311 --dotenv /tmp/kr-test.env:KR_TEST_TOKEN
+```
+```
+Here's what will happen:
+  1. GitLab replaces "kr-test" with a new token and immediately revokes the old one. This can't be undone.
+  2. The new token is saved to KR_TEST_TOKEN in /tmp/kr-test.env.
+  3. keyrotator checks that the new token works.
+
+Go ahead? [Y/n] y
+
+Rotating kr-test…
+  · Rotating (provider revokes old token immediately)…
+  · Updating 1 consumer(s)…
+  · Verifying new token…
+  ✓ Rotated successfully.
+
+New key id: 28550312
+Updated: KR_TEST_TOKEN in /tmp/kr-test.env
+Old token was revoked by the provider.
+```
+
+**5. Check and clean up.**
+
+```bash
+cat /tmp/kr-test.env      # KR_TEST_TOKEN=glpat-…
+rm /tmp/kr-test.env
+```
+
+Then delete `kr-test` in GitLab.
+
+**For real keys:** run `keyrotator rotate gitlab` with no arguments — it lets
+you pick the key and destination and can save that to `keyrotator.toml`, so
+the next rotation is one command. In scripts/CI:
+
+```bash
+keyrotator rotate gitlab 28550311 --dotenv .env --yes --no-input
 ```
 
 ## Commands
